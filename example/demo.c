@@ -1142,16 +1142,25 @@ void drawBezierCurve(NVGcontext* vg, float x0, float y0, float x1, float y1){
 	// nvgBezierTo(vg, x0, ((y1 - y0) * 0.25f) + y0, x1, ((y1 - y0) * 0.75f) + y0, x1, y1);
 	// new
 	float cx0 = x0+0.01*(x1-x0);
-	float cy0 = y0 + ((y1 - y0) * 0.25f);
+	float cy0 = y0 + ((y1 - y0) * 0.75f);
 	float cx1 = x1-0.01*(x1-x0);
 	float cy1 = y0 + ((y1 - y0) * 0.25f);
-	
-	if((y1-y0)<0){
+
+    int swapPoints = 0;
+
+    if ((y1 < y0) && (x1 < x0))
+        swapPoints = 0;
+    else if (((y1 - y0) < 0) || ((x1 - x0) < 0))
+        swapPoints = 1;
+
+    if (swapPoints) {
+        printf("swapping points\n");
 		swap(&cx0,&cx1);
 		swap(&cy0,&cy1);
 		swap(&x0,&x1);
 		swap(&y0,&y1);
-	}
+	} else
+	    printf("not swapping points\n");
 	
 	nvgBeginPath(vg);
 	nvgMoveTo(vg, x0, y0);
@@ -1164,7 +1173,10 @@ void drawBezierCurve(NVGcontext* vg, float x0, float y0, float x1, float y1){
 
 	nvgBeginPath(vg);
 	nvgMoveTo(vg, x0, y0);
+
 	nvgBezierTo(vg, cx0, cy0, cx1, cy1, x1, y1);
+    //nvgBezierTo(vg, x0, ((y1 - y0) * 0.75f) + y0, x1, ((y1 - y0) * 0.25f) + y0, x1, y1);
+
 	nvgLineCap(vg, NVG_ROUND);
 	nvgStrokeWidth(vg,5);
 	nvgLineJoin(vg, NVG_ROUND);
