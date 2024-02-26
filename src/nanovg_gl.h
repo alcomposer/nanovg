@@ -124,7 +124,8 @@ enum GLNVGshaderType {
 	NSVG_SHADER_FILLGRAD,
 	NSVG_SHADER_FILLIMG,
 	NSVG_SHADER_SIMPLE,
-	NSVG_SHADER_IMG
+	NSVG_SHADER_IMG,
+	NSVG_SHADER_DOTS
 };
 
 #if NANOVG_GL_USE_UNIFORMBUFFER
@@ -633,6 +634,9 @@ static int glnvg__renderCreate(void* uptr)
 		"float glow(vec2 uv){\n"
 		"  return smoothstep(0.0, 1.0, 1.0 - 2.0 * abs(uv.x));\n"
 		"}\n"
+        "float circleDist(vec2 p, vec2 center) {\n"
+        "  return distance(center, p) - 1.0f;\n"
+        "}\n"
 		"float dashed(vec2 uv){\n"
 		"	float fy = fract(uv.y / 4.0);\n"
 		"	float w = step(fy, 0.5);\n"
@@ -709,7 +713,14 @@ static int glnvg__renderCreate(void* uptr)
 		"		if (texType == 2) color = vec4(color.x);"
 		"		color *= scissor;\n"
 		"		result = color * innerCol;\n"
-		"	}\n"
+		"	} else if (type == 4) {     // Dot pattern for plugdata\n"
+        "       vec2 pt = (paintMat * vec3(fpos, 1.0)).xy - 12.5;\n"
+        "       vec2 center = 25.0f * floor(pt.xy / 25.0f) + 25.0f / 2.0f;\n"
+        "       vec4 dotColor = mix(innerCol, outerCol, clamp(circleDist(pt.xy, center), 0.0f, 1.0f));\n"
+        "       vec4 color = mix(dotColor, vec4(0.0f, 0.0f, 0.0f, 0.0f), 0.1f * distance(uv.xy, vec2(0.5f)));\n"
+        "       color *= strokeAlpha * scissor;\n"
+        "       result = color;\n"
+        "}\n"
 		"#ifdef NANOVG_GL3\n"
 		"	outColor = result;\n"
 		"#else\n"
@@ -1017,7 +1028,7 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 		#endif
 //		printf("frag->texType = %d\n", frag->texType);
 	} else {
-		frag->type = NSVG_SHADER_FILLGRAD;
+		frag->type = paint->dots ? NSVG_SHADER_DOTS : NSVG_SHADER_FILLGRAD;
 		frag->radius = paint->radius;
 		frag->feather = paint->feather;
 		nvgTransformInverse(invxform, paint->xform);

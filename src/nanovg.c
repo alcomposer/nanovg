@@ -885,6 +885,19 @@ void nvgDeleteImage(NVGcontext* ctx, int image)
 	ctx->params.renderDeleteTexture(ctx->params.userPtr, image);
 }
 
+NVGpaint nvgDotPattern(NVGcontext* ctx, NVGcolor icol, NVGcolor ocol)
+{
+    NVGpaint p;
+    NVG_NOTUSED(ctx);
+    memset(&p, 0, sizeof(p));
+
+	nvgTransformIdentity(p.xform);
+    p.dots = 1;
+	p.innerColor = icol;
+	p.outerColor = ocol;
+    return p;
+}
+
 NVGpaint nvgLinearGradient(NVGcontext* ctx,
 								  float sx, float sy, float ex, float ey,
 								  NVGcolor icol, NVGcolor ocol)
