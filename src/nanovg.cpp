@@ -2899,6 +2899,24 @@ void nvgDrawRoundedRect(NVGcontext* ctx, float x, float y, float w, float h, NVG
     nvgFillRect(ctx, x, y, w, h);
 }
 
+void nvgDrawVignette(NVGcontext* ctx, float x, float y, float w, float h, NVGcolor icol, NVGcolor ocol, float size, float intensity)
+{
+    NVGpaint p;
+    memset(&p, 0, sizeof(p));
+    nvgTransformIdentity(p.xform);
+
+    p.vignette = 1;
+    p.radius = size;
+    p.feather = intensity;
+    p.innerColor = icol;
+    p.outerColor = ocol;
+    p.extent[0] = w;
+    p.extent[1] = h;
+
+    nvgFillPaint(ctx, p);
+    nvgFillRect(ctx, x, y, w, h);
+}
+
 // Add fonts
 int nvgCreateFont(NVGcontext* ctx, const char* name, const char* filename)
 {

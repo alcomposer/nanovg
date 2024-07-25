@@ -128,7 +128,8 @@ enum GLNVGshaderType {
 	NSVG_SHADER_DOTS,
 	NSVG_SHADER_FAST_ROUNDEDRECT,
 	NSVG_SHADER_FILLCOLOR,
-    NSVG_DOUBLE_STROKE
+    NSVG_DOUBLE_STROKE,
+    NSVG_SHADER_VIGNETTE
 };
 
 #if NANOVG_GL_USE_UNIFORMBUFFER
@@ -682,6 +683,9 @@ static int glnvg__renderCreate(void* uptr)
 			float fy = 4.0f * fract(uv.y / (4.0)) - 0.5f;
 			return smoothstep(0.0f, 1.0f, 6.0f * (0.25f - (uv.x * uv.x  + fy * fy)));
 		}
+        float gradientNoise(in vec2 uv){
+	        return fract(52.9829189 * fract(dot(uv, vec2(0.06711056, 0.00583715))));
+        }
 		#ifdef EDGE_AA
 		// Stroke - from [0..1] to clipped pyramid, where the slope is 1px.
 		float strokeMask() {
@@ -712,6 +716,22 @@ static int glnvg__renderCreate(void* uptr)
 				return;
 		#endif
 			}
+            if (type == 8) { // vignette shader
+                vec2 fragCoord = ((paintMat * vec3(fpos,1.0f))).xy;
+                vec2 UV = fragCoord / extent.xy;
+                UV *= 1.0f - UV.yx;
+                float vig = UV.x * UV.y * feather; // 14.0f intensity
+                vig = pow(vig, radius); // 0.25f radius
+                vec4 outCol = vec4(mix(outerCol, innerCol, vig));
+                outCol += (1.0f / 25.0f) * gradientNoise(fragCoord) - (0.5f / 25.0f);
+                result = outCol;
+		#ifdef NANOVG_GL3
+				outColor = result;
+		#else
+				gl_FragColor = result;
+		#endif
+				return;
+            }
 			if (type == 5) { //rounded rect fill+stroke
 				// Calculate distance to edge.
 				vec2 pt = (paintMat * vec3(fpos,1.0f)).xy;
@@ -719,8 +739,6 @@ static int glnvg__renderCreate(void* uptr)
 				float outerD = fwidth(oD) * 0.5f;
 				float iD = sdroundrect(pt, extent - vec2(1.0f), radius - 1.0f) - 0.04f;
                 float innerD = fwidth(iD) * 0.5f;
-				vec2 dx = dFdx(pt);
-				vec2 dy = dFdy(pt);
 				float outerRoundedRectAlpha = clamp(inverseLerp(outerD, -outerD, oD), 0.0f, 1.0f);
                 float innerRoundedRectAlpha = clamp(inverseLerp(innerD, -innerD, iD), 0.0f, 1.0f);
 				result = vec4(mix(outerCol.rgba, innerCol.rgba, innerRoundedRectAlpha).rgba * outerRoundedRectAlpha) * scissor;
@@ -1126,22 +1144,35 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
         frag->scissorScale[0] = sqrtf(scissor->xform[0]*scissor->xform[0] + scissor->xform[2]*scissor->xform[2]) / fringe;
         frag->scissorScale[1] = sqrtf(scissor->xform[1]*scissor->xform[1] + scissor->xform[3]*scissor->xform[3]) / fringe;
         frag->radius = paint->radius;
-    } else if(paint->double_stroke)
+    }
+    else if(paint->double_stroke)
     {
         frag->type = NSVG_DOUBLE_STROKE;
         frag->lineLength = lineLength;
         frag->feather = paint->feather;
         nvgTransformInverse(invxform, paint->xform);
     }
-    else if(paint->dots) {
-	   frag->type = NSVG_SHADER_DOTS;
-	   frag->feather = paint->feather;
-	   frag->patternSize = paint->dot_pattern_size;
-		nvgTransformInverse(invxform, paint->xform);
-	} else if (paint->image == 0 && lineStyle == NVG_LINE_SOLID && !is_gradient) {
+    else if(paint->dots)
+    {
+        frag->type = NSVG_SHADER_DOTS;
+        frag->feather = paint->feather;
+        frag->patternSize = paint->dot_pattern_size;
+        nvgTransformInverse(invxform, paint->xform);
+    }
+    else if(paint->vignette)
+    {
+        frag->type = NSVG_SHADER_VIGNETTE;
+        frag->feather = paint->feather;
+        frag->radius = paint->radius;
+        nvgTransformInverse(invxform, paint->xform);
+	}
+	else if (paint->image == 0 && lineStyle == NVG_LINE_SOLID && !is_gradient)
+	{
         frag->type = NSVG_SHADER_FILLCOLOR;
         nvgTransformInverse(invxform, paint->xform);
-    } else {
+    }
+    else
+    {
 		frag->type = NSVG_SHADER_FILLGRAD;
 		frag->feather = paint->feather;
         frag->lineLength = lineLength;
@@ -1613,10 +1644,14 @@ static void glnvg__renderFill(void* uptr, NVGpaint* paint, NVGcompositeOperation
     {
         frag->type = NSVG_SHADER_FAST_ROUNDEDRECT;
     }
-    else if (paint->image == 0 && !is_gradient) {
+    else if (paint->vignette)
+    {
+        frag->type = NSVG_SHADER_VIGNETTE;
+    }
+    else if (paint->image == 0 && !is_gradient)
+    {
       frag->type = NSVG_SHADER_FILLCOLOR;
     }
-
 	return;
 
 error:
