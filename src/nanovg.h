@@ -68,6 +68,56 @@ extern "C" {
 #define NVGframebuffer NVGLUframebuffer
 #endif
 
+#include <immintrin.h> // For AVX intrinsics
+#include <chrono>
+
+union alignas(32) vec6 {
+    struct {
+        float x, y, u, v, s, t;
+        float padding[2];
+    };
+    float array[8];
+    __m256 AVXfloats;
+
+    vec6()
+    {
+        x = 0.0f;
+        y = 0.0f;
+        u = 0.0f;
+        v = 0.0f;
+        s = 0.0f;
+        t = 0.0f;
+        padding[0] = 0.0f;
+        padding[1] = 0.0f;
+    }
+
+    vec6(float x, float y, float u, float v, float s, float t) : x(x), y(y), u(u), v(v), s(s), t(t){}
+
+    vec6(float* data)
+    {
+        x = data[0];
+        y = data[1];
+        u = data[2];
+        v = data[3];
+        s = data[4];
+        t = data[5];
+    }
+
+    // Overload the subscript operator to access elements using array notation
+    float& operator[](size_t index) {
+        return array[index];
+    }
+
+    const float& operator[](size_t index) const {
+        return array[index];
+    }
+};
+
+struct NVGvertex {
+    float x,y;
+    int16_t u,v,s,t;
+};
+typedef struct NVGvertex NVGvertex;
 
 typedef struct NVGcontext NVGcontext;
 
@@ -83,7 +133,7 @@ typedef struct NVGcolor NVGcolor;
 typedef struct NVGcolor NVGcolor;
 
 struct NVGpaint {
-	float xform[6];
+	vec6 xform;
 	float extent[2];
 	float radius;
 	float feather;
@@ -386,23 +436,23 @@ void nvgScale(NVGcontext* ctx, float x, float y);
 //   [b d f]
 //   [0 0 1]
 // There should be space for 6 floats in the return buffer for the values a-f.
-void nvgCurrentTransform(NVGcontext* ctx, float* xform);
+void nvgCurrentTransform(NVGcontext* ctx, vec6& xform);
 
 
 // The following functions can be used to make calculations on 2x3 transformation matrices.
 // A 2x3 matrix is represented as float[6].
 
 // Sets the transform to identity matrix.
-void nvgTransformIdentity(float* dst);
+void nvgTransformIdentity(vec6& dst);
 
 // Sets the transform to translation matrix matrix.
-void nvgTransformTranslate(float* dst, float tx, float ty);
+void nvgTransformTranslate(vec6& dst, float tx, float ty);
 
 // Sets the transform to scale matrix.
-void nvgTransformScale(float* dst, float sx, float sy);
+void nvgTransformScale(vec6& dst, float sx, float sy);
 
 // Sets the transform to rotate matrix. Angle is specified in radians.
-void nvgTransformRotate(float* dst, float a);
+void nvgTransformRotate(vec6& dst, float a);
 
 // Sets the transform to skew-x matrix. Angle is specified in radians.
 void nvgTransformSkewX(float* dst, float a);
@@ -411,17 +461,20 @@ void nvgTransformSkewX(float* dst, float a);
 void nvgTransformSkewY(float* dst, float a);
 
 // Sets the transform to the result of multiplication of two transforms, of A = A*B.
-void nvgTransformMultiply(float* dst, const float* src);
+void nvgTransformMultiply(vec6& dst, const vec6 src);
 
 // Sets the transform to the result of multiplication of two transforms, of A = B*A.
-void nvgTransformPremultiply(float* dst, const float* src);
+void nvgTransformPremultiply(vec6& dst, const vec6 src);
 
 // Sets the destination to inverse of specified transform.
 // Returns 1 if the inverse could be calculated, else 0.
-int nvgTransformInverse(float* dst, const float* src);
+int nvgTransformInverse(vec6& dst, const vec6 src);
 
 // Transform a point by given transform.
-void nvgTransformPoint(float* dstx, float* dsty, const float* xform, float srcx, float srcy);
+void nvgTransformPoint(float* dstx, float* dsty, const vec6 xform, float srcx, float srcy);
+
+// Transform two points by given transform at the same time (AVX).
+void nvgTransformPointDual(NVGvertex * v1, NVGvertex * v2, const vec6 xform);
 
 // Converts degrees to radians and vice versa.
 float nvgDegToRad(float deg);
@@ -754,7 +807,7 @@ enum NVGtexture {
 };
 
 struct NVGscissor {
-	float xform[6];
+	vec6 xform;
 	float extent[2];
     float radius;
 };
@@ -767,12 +820,6 @@ struct NVGscissorBounds {
     float h;
 };
 typedef struct NVGscissorBounds NVGscissorBounds;
-
-struct NVGvertex {
-    float x,y;
-    int16_t u,v,s,t;
-};
-typedef struct NVGvertex NVGvertex;
 
 struct NVGpath {
 	int first;

@@ -894,7 +894,7 @@ static int glnvg__renderGetImageTextureId(void* uptr, int handle)
 	}
 }
 
-static void glnvg__xformToMat3x4(float* m3, float* t)
+static void glnvg__xformToMat3x4(float* m3, vec6& t)
 {
 	m3[0] = t[0];
 	m3[1] = t[1];
@@ -922,7 +922,7 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 							   NVGscissor* scissor, float width, float fringe, float lineLength, int lineStyle, bool lineReversed = false)
 {
 	GLNVGtexture* tex = NULL;
-	float invxform[6];
+	vec6 invxform;
 	int is_gradient = memcmp(&(paint->innerColor), &(paint->outerColor), sizeof(paint->outerColor));
 	memset(frag, 0, sizeof(*frag));
 
@@ -957,7 +957,7 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 		tex = glnvg__findTexture(gl, paint->image);
 		if (tex == NULL) return 0;
 		if ((tex->flags & NVG_IMAGE_FLIPY) != 0) {
-			float m1[6], m2[6];
+			vec6 m1, m2;
 			nvgTransformTranslate(m1, 0.0f, frag->extent[1] * 0.5f);
 			nvgTransformMultiply(m1, paint->xform);
 			nvgTransformScale(m2, 1.0f, -1.0f);

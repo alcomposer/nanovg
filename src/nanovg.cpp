@@ -88,7 +88,7 @@ struct NVGstate {
 	float strokeWidth;
 	float miterLimit;
 	float alpha;
-	float xform[6];
+	vec6 xform;
 	float fontSize;
 	float letterSpacing;
 	float lineHeight;
@@ -128,7 +128,7 @@ typedef struct NVGpathCache NVGpathCache;
 
 struct StrokeCacheLine {
     std::vector<NVGpath> paths;
-    float currentTransform[6];
+    vec6 currentTransform;
     float lineLength;
 };
 
@@ -558,28 +558,28 @@ NVGcolor nvgHSLA(float h, float s, float l, unsigned char a)
 	return col;
 }
 
-void nvgTransformIdentity(float* t)
+void nvgTransformIdentity(vec6& t)
 {
 	t[0] = 1.0f; t[1] = 0.0f;
 	t[2] = 0.0f; t[3] = 1.0f;
 	t[4] = 0.0f; t[5] = 0.0f;
 }
 
-void nvgTransformTranslate(float* t, float tx, float ty)
+void nvgTransformTranslate(vec6& t, float tx, float ty)
 {
 	t[0] = 1.0f; t[1] = 0.0f;
 	t[2] = 0.0f; t[3] = 1.0f;
 	t[4] = tx; t[5] = ty;
 }
 
-void nvgTransformScale(float* t, float sx, float sy)
+void nvgTransformScale(vec6& t, float sx, float sy)
 {
 	t[0] = sx; t[1] = 0.0f;
 	t[2] = 0.0f; t[3] = sy;
 	t[4] = 0.0f; t[5] = 0.0f;
 }
 
-void nvgTransformRotate(float* t, float a)
+void nvgTransformRotate(vec6& t, float a)
 {
 	float cs = nvg__cosf(a), sn = nvg__sinf(a);
 	t[0] = cs; t[1] = sn;
@@ -601,7 +601,7 @@ void nvgTransformSkewY(float* t, float a)
 	t[4] = 0.0f; t[5] = 0.0f;
 }
 
-void nvgTransformMultiply(float* __restrict t, const float* __restrict s)
+void nvgTransformMultiply(vec6& __restrict t, const vec6 s)
 {
 	float t0 = t[0] * s[0] + t[1] * s[2];
 	float t2 = t[2] * s[0] + t[3] * s[2];
@@ -614,15 +614,14 @@ void nvgTransformMultiply(float* __restrict t, const float* __restrict s)
 	t[4] = t4;
 }
 
-void nvgTransformPremultiply(float* t, const float* s)
+void nvgTransformPremultiply(vec6& t, const vec6 s)
 {
-	float s2[6];
-	memcpy(s2, s, sizeof(float)*6);
+    vec6 s2 = s;
 	nvgTransformMultiply(s2, t);
-	memcpy(t, s2, sizeof(float)*6);
+	t = s2;
 }
 
-int nvgTransformInverse(float* __restrict inv, const float* __restrict t)
+int nvgTransformInverse(vec6& __restrict inv, const vec6 t)
 {
 	double invdet, det = (double)t[0] * t[3] - (double)t[2] * t[1];
 	if (det > -1e-6 && det < 1e-6) {
@@ -639,10 +638,100 @@ int nvgTransformInverse(float* __restrict inv, const float* __restrict t)
 	return 1;
 }
 
-void nvgTransformPoint(float* dx, float* dy, const float* t, float sx, float sy)
+void nvgTransformPoint(float* dx, float* dy, const vec6 t, float sx, float sy)
 {
+#ifndef AVX1
 	*dx = sx*t[0] + sy*t[2] + t[4];
 	*dy = sx*t[1] + sy*t[3] + t[5];
+#else
+    // Load scalar values into SIMD registers
+    __m256 sx_vec = _mm256_set1_ps(sx); // Broadcast sx into all elements
+    __m256 sy_vec = _mm256_set1_ps(sy); // Broadcast sy into all elements
+
+    __m256 sx_sy = _mm256_permute2f128_ps(sx_vec, sy_vec, 0x20);
+    __m256 sx_sy_b = _mm256_blend_ps(sx_sy, sy_vec, 0x0C);
+
+    __m256 multiply = _mm256_mul_ps(t.AVXfloats, sx_sy_b);
+    __m256 shuffled = _mm256_shuffle_ps(multiply, multiply, _MM_SHUFFLE(1, 0, 3, 2));
+    __m256 result = _mm256_add_ps(shuffled, multiply);
+
+    __m256 t4_t5 = _mm256_permute2f128_ps(t.AVXfloats, t.AVXfloats, 0x21);
+    __m256 final = _mm256_add_ps(result, t4_t5);
+
+    // Store the results
+    *dx = ((float*)&final)[0];
+    *dy = ((float*)&final)[1];
+#endif
+}
+
+void nvgTransformPointDual(NVGvertex * v1, NVGvertex * v2, const vec6 t)
+{
+#ifndef AVX2
+    float sx1 = v1->x;
+    float sy1 = v1->y;
+    float sx2 = v2->x;
+    float sy2 = v2->y;
+    v1->x = sx1*t[0] + sy1*t[2] + t[4];
+    v1->y = sx1*t[1] + sy1*t[3] + t[5];
+    v2->x = sx2*t[0] + sy2*t[2] + t[4];
+    v2->y = sx2*t[1] + sy2*t[3] + t[5];
+#else
+
+    __m256 transform = _mm256_permute2f128_ps(t.AVXfloats, t.AVXfloats, 0x00);
+    __m256 sx_sy_all = _mm256_setr_ps(v1->x, v1->x, v1->y, v1->y, v2->x, v2->x, v2->y, v2->y);
+
+    const __m256i permute_control = _mm256_setr_epi32(4, 4, 5, 5, 4, 4, 5, 5);
+    __m256 t4_t5_all = _mm256_permutevar8x32_ps(t.AVXfloats, permute_control);
+
+    __m256 transmult = _mm256_mul_ps(transform, sx_sy_all);
+    __m256 shuffled = _mm256_permute_ps(transmult, _MM_SHUFFLE(2, 3, 0, 1));
+
+    __m256 add1 = _mm256_add_ps(shuffled, transmult);
+    __m256 addFinal = _mm256_add_ps(add1, t4_t5_all);
+
+    v1->x = ((float*)&addFinal)[0];
+    v1->y = ((float*)&addFinal)[2];
+    v2->x = ((float*)&addFinal)[4];
+    v2->y = ((float*)&addFinal)[6];
+
+//#define DEBUG_AVX
+#ifdef DEBUG_AVX
+
+    static bool show = true;
+    if (show) {
+        std::cout << "good: " << std::flush;
+        for (int i = 0; i < 8; i++){
+            std::cout << ((float*)&t.AVXfloats)[i] << " " << std::flush;
+        }
+        std::cout << "bad: " << std::flush;
+        for (int i = 0; i < 8; i++){
+            std::cout << ((float*)&t4_t5_all)[i] << " " << std::flush;
+        }
+        std::cout << std::endl;
+        show = false;
+    }
+#endif
+#endif
+
+/*
+    // Load scalar values into SIMD registers
+    __m256 sx_vec = _mm256_set1_ps(sx); // Broadcast sx into all elements
+    __m256 sy_vec = _mm256_set1_ps(sy); // Broadcast sy into all elements
+
+    __m256 sx_sy = _mm256_permute2f128_ps(sx_vec, sy_vec, 0x20);
+    __m256 sx_sy_b = _mm256_blend_ps(sx_sy, sy_vec, 0x0C);
+
+    __m256 multiply = _mm256_mul_ps(t.AVXfloats, sx_sy_b);
+    __m256 shuffled = _mm256_shuffle_ps(multiply, multiply, _MM_SHUFFLE(1, 0, 3, 2));
+    __m256 result = _mm256_add_ps(shuffled, multiply);
+
+    __m256 t4_t5 = _mm256_permute2f128_ps(t.AVXfloats, t.AVXfloats, 0x21);
+    __m256 final = _mm256_add_ps(result, t4_t5);
+
+    // Store the results
+    *dx = ((float*)&final)[0];
+    *dy = ((float*)&final)[1];
+     */
 }
 
 float nvgDegToRad(float deg)
@@ -804,7 +893,7 @@ void nvgResetTransform(NVGcontext* ctx)
 void nvgTranslate(NVGcontext* ctx, float x, float y)
 {
 	NVGstate* state = nvg__getState(ctx);
-	float t[6];
+	vec6 t;
 	nvgTransformTranslate(t, x,y);
 	nvgTransformPremultiply(state->xform, t);
 }
@@ -812,7 +901,7 @@ void nvgTranslate(NVGcontext* ctx, float x, float y)
 void nvgRotate(NVGcontext* ctx, float angle)
 {
 	NVGstate* state = nvg__getState(ctx);
-	float t[6];
+	vec6 t;
 	nvgTransformRotate(t, angle);
 	nvgTransformPremultiply(state->xform, t);
 }
@@ -836,16 +925,16 @@ void nvgSkewY(NVGcontext* ctx, float angle)
 void nvgScale(NVGcontext* ctx, float x, float y)
 {
 	NVGstate* state = nvg__getState(ctx);
-	float t[6];
+	vec6 t;
 	nvgTransformScale(t, x,y);
 	nvgTransformPremultiply(state->xform, t);
 }
 
-void nvgCurrentTransform(NVGcontext* ctx, float* xform)
+void nvgCurrentTransform(NVGcontext* ctx, vec6& xform)
 {
 	NVGstate* state = nvg__getState(ctx);
-	if (xform == NULL) return;
-	memcpy(xform, state->xform, sizeof(float)*6);
+	//if (xform == NULL) return; ALEX??- DO WE NEED THIS HERE?
+    xform = state->xform;
 }
 
 void nvgStrokeColor(NVGcontext* ctx, NVGcolor color)
@@ -1163,7 +1252,7 @@ static void nvg__isectRects(float* dst,
 void nvgIntersectScissor(NVGcontext* ctx, float x, float y, float w, float h)
 {
 	NVGstate* state = nvg__getState(ctx);
-	float pxform[6], invxorm[6];
+	vec6 pxform, invxorm;
 	float rect[4];
 	float ex, ey, tex, tey;
 
@@ -1175,7 +1264,7 @@ void nvgIntersectScissor(NVGcontext* ctx, float x, float y, float w, float h)
 
 	// Transform the current scissor rect into current transform space.
 	// If there is difference in rotation, this will be approximation.
-	memcpy(pxform, state->scissor.xform, sizeof(float)*6);
+	pxform = state->scissor.xform;
 	ex = state->scissor.extent[0];
 	ey = state->scissor.extent[1];
 	nvgTransformInverse(invxorm, state->xform);
@@ -1192,7 +1281,7 @@ void nvgIntersectScissor(NVGcontext* ctx, float x, float y, float w, float h)
 void nvgIntersectRoundedScissor(NVGcontext* ctx, float x, float y, float w, float h, float r)
 {
     NVGstate* state = nvg__getState(ctx);
-    float pxform[6], invxorm[6];
+    vec6 pxform, invxorm;
     float rect[4];
     float ex, ey, tex, tey;
 
@@ -1204,7 +1293,7 @@ void nvgIntersectRoundedScissor(NVGcontext* ctx, float x, float y, float w, floa
 
     // Transform the current scissor rect into current transform space.
     // If there is difference in rotation, this will be approximation.
-    memcpy(pxform, state->scissor.xform, sizeof(float)*6);
+    pxform = state->scissor.xform;
     ex = state->scissor.extent[0];
     ey = state->scissor.extent[1];
     nvgTransformInverse(invxorm, state->xform);
@@ -1221,7 +1310,8 @@ void nvgIntersectRoundedScissor(NVGcontext* ctx, float x, float y, float w, floa
 void nvgResetScissor(NVGcontext* ctx)
 {
 	NVGstate* state = nvg__getState(ctx);
-	memset(state->scissor.xform, 0, sizeof(state->scissor.xform));
+	//memset(state->scissor.xform, 0, sizeof(state->scissor.xform));
+    state->scissor.xform = vec6();
 	state->scissor.extent[0] = -1.0f;
 	state->scissor.extent[1] = -1.0f;
     state->scissor.radius = 0.0f;
@@ -1415,7 +1505,7 @@ static void nvg__pathWinding(NVGcontext* ctx, NVGwinding winding)
 	path->winding = winding;
 }
 
-static float nvg__getAverageScale(float *t)
+static float nvg__getAverageScale(vec6& t)
 {
 	float sx = nvg__sqrtf(t[0]*t[0] + t[2]*t[2]);
 	float sy = nvg__sqrtf(t[1]*t[1] + t[3]*t[3]);
@@ -2608,7 +2698,7 @@ int32_t nvgSavePath(NVGcontext* ctx, uint32_t pathId)
       pathCopy.stroke = (NVGvertex*) malloc( p.nstroke * sizeof(NVGvertex) );
       memcpy(pathCopy.stroke, p.stroke, p.nstroke * sizeof(NVGvertex));
 
-      memcpy(cacheEntry.currentTransform, state->xform, sizeof(float) * 6);
+      cacheEntry.currentTransform = state->xform;
       cacheEntry.paths.push_back(pathCopy);
     }
     
@@ -2635,6 +2725,11 @@ void nvgDeletePath(NVGcontext* ctx, uint32_t pathId)
 
 int nvgStrokeCachedPath(NVGcontext* ctx, uint32_t pathId)
 {
+    static int runCount = 0;
+    static long long totalDuration = 0;
+    auto startTime = std::chrono::high_resolution_clock::now();
+
+    static int c = 0;
     auto cacheItemIterator = CACHE.find(pathId);
     if(cacheItemIterator != CACHE.end())
     {
@@ -2642,28 +2737,53 @@ int nvgStrokeCachedPath(NVGcontext* ctx, uint32_t pathId)
         const float scale = nvg__getAverageScale(state->xform);
         float strokeWidth = nvg__clampf(state->strokeWidth * scale, 0.0f, 1000.0f);
         NVGpaint strokePaint = state->stroke;
-        
+
         auto& cacheEntry = cacheItemIterator->second;
-        
-        float totalTransform[6];
+
+        vec6 totalTransform;
         nvgTransformInverse(totalTransform, cacheEntry.currentTransform);
         nvgTransformMultiply(totalTransform, state->xform);
-        
         // Apply transform
         for (int i = 0; i < cacheEntry.paths.size(); i++) {
-          auto& cachedPath = cacheEntry.paths[i];
-          for(int j = 0; j < cachedPath.nstroke; j++)
-          {
-              nvgTransformPoint(&cachedPath.stroke[j].x, &cachedPath.stroke[j].y, totalTransform, cachedPath.stroke[j].x, cachedPath.stroke[j].y);
-          }
+            auto& cachedPath = cacheEntry.paths[i];
+#define DUAL_PROCESS
+//#define AVX1
+#define AVX2
+#ifdef DUAL_PROCESS
+            for(int j = 0; j < cachedPath.nstroke; j += 2)
+            {
+                // transform 2 points at a time
+                if (j + 1 < cachedPath.nstroke) {
+                    nvgTransformPointDual(&cachedPath.stroke[j], &cachedPath.stroke[j + 1], totalTransform);
+                }
+                // if there is one left complete with single function
+                else {
+                    nvgTransformPoint(&cachedPath.stroke[j].x, &cachedPath.stroke[j].y, totalTransform, cachedPath.stroke[j].x, cachedPath.stroke[j].y);
+                }
+            }
+#else
+            for(int j = 0; j < cachedPath.nstroke; j++)
+                nvgTransformPoint(&cachedPath.stroke[j].x, &cachedPath.stroke[j].y, totalTransform, cachedPath.stroke[j].x, cachedPath.stroke[j].y);
+#endif
         }
-        
-        memcpy(cacheEntry.currentTransform, state->xform, 6*sizeof(float));
+        cacheEntry.currentTransform = state->xform;
 
         ctx->params.renderStroke(ctx->params.userPtr, &strokePaint, state->compositeOperation, &state->scissor, ctx->fringeWidth, strokeWidth, state->lineStyle, cacheEntry.lineLength, cacheEntry.paths.data(), (int)cacheEntry.paths.size());
+
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time - startTime);
+
+        totalDuration += duration.count();
+        runCount++;
+        long long averageDuration = totalDuration / runCount;
+
+        if (runCount % 1000 == 0)
+            std::cout << "average over: " << runCount << " runs is: " << averageDuration << std::endl;
+
         return 1;
     }
-    
+
     return 0;
 }
 
@@ -2677,13 +2797,39 @@ int nvgFillCachedPath(NVGcontext* ctx, uint32_t pathId)
 
         auto& cacheEntry = cacheItemIterator->second;
         
-        float totalTransform[6];
+        vec6 totalTransform;
         nvgTransformInverse(totalTransform, cacheEntry.currentTransform);
         nvgTransformMultiply(totalTransform, state->xform);
         
         // Apply transform
         for (int i = 0; i < cacheEntry.paths.size(); i++) {
           auto& cachedPath = cacheEntry.paths[i];
+#ifdef DUAL_PROCESS
+          for(int j = 0; j < cachedPath.nstroke; j += 2)
+          {
+              // transform 2 points at a time
+              if (j + 1 < cachedPath.nstroke) {
+                  nvgTransformPointDual(&cachedPath.stroke[j], &cachedPath.stroke[j + 1], totalTransform);
+              }
+                  // if there is one left complete with single function
+              else {
+                  nvgTransformPoint(&cachedPath.stroke[j].x, &cachedPath.stroke[j].y, totalTransform, cachedPath.stroke[j].x, cachedPath.stroke[j].y);
+              }
+          }
+
+          for(int j = 0; j < cachedPath.nfill; j += 2)
+          {
+              // transform 2 points at a time
+              if (j + 1 < cachedPath.nfill) {
+                  nvgTransformPointDual(&cachedPath.fill[j], &cachedPath.fill[j + 1], totalTransform);
+              }
+              // if there is one left complete with single function
+              else {
+                  nvgTransformPoint(&cachedPath.fill[j].x, &cachedPath.fill[j].y, totalTransform, cachedPath.fill[j].x, cachedPath.fill[j].y);
+              }
+          }
+
+#else
           for(int j = 0; j < cachedPath.nstroke; j++)
           {
               nvgTransformPoint(&cachedPath.stroke[j].x, &cachedPath.stroke[j].y, totalTransform, cachedPath.stroke[j].x, cachedPath.stroke[j].y);
@@ -2692,9 +2838,10 @@ int nvgFillCachedPath(NVGcontext* ctx, uint32_t pathId)
           {
               nvgTransformPoint(&cachedPath.fill[j].x, &cachedPath.fill[j].y, totalTransform, cachedPath.fill[j].x, cachedPath.fill[j].y);
           }
+#endif
         }
-        
-        memcpy(cacheEntry.currentTransform, state->xform, 6*sizeof(float));
+
+        cacheEntry.currentTransform = state->xform;
 
         ctx->params.renderFill(ctx->params.userPtr, &fillPaint, state->compositeOperation, &state->scissor, ctx->fringeWidth, ctx->cache->bounds, cacheEntry.paths.data(), (int)cacheEntry.paths.size());
         return 1;
@@ -3052,7 +3199,7 @@ static void nvg__renderText(NVGcontext* ctx, NVGvertex* verts, int nverts)
 #endif
 }
 
-static int nvg__isTransformFlipped(const float *xform)
+static int nvg__isTransformFlipped(const vec6& xform)
 {
 	float det = xform[0] * xform[3] - xform[2] * xform[1];
 	return( det < 0);
