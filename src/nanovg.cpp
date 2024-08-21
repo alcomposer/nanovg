@@ -358,7 +358,7 @@ NVGcontext* nvgCreateInternal(NVGparams* params)
 	if (ctx->fs == NULL) goto error;
 
 	// Create font texture
-	ctx->fontImages[0] = ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_ALPHA, fontParams.width, fontParams.height, 0, NULL);
+	ctx->fontImages[0] = ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_ALPHA, fontParams.width, fontParams.height, 0, NULL, 0, 0);
 	if (ctx->fontImages[0] == 0) goto error;
 	ctx->fontImageIdx = 0;
     ctx->scissor = {0.0f, 0.0f, -1.0f, -1.0f};
@@ -926,7 +926,12 @@ int nvgCreateImageMem(NVGcontext* ctx, int imageFlags, unsigned char* data, int 
 
 int nvgCreateImageRGBA(NVGcontext* ctx, int w, int h, int imageFlags, const unsigned char* data)
 {
-	return ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_RGBA, w, h, imageFlags, data);
+	return ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_RGBA, w, h, imageFlags, data, 0, 0);
+}
+
+int nvgCreateImageAlpha(NVGcontext* ctx, int w, int h, int imageFlags, const unsigned char* data, int scaledW, int scaledH)
+{
+    return ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_ALPHA, w, h, imageFlags, data, scaledW, scaledH);
 }
 
 void nvgUpdateImage(NVGcontext* ctx, int image, const unsigned char* data)
@@ -1127,6 +1132,18 @@ NVGpaint nvgImagePattern(NVGcontext* ctx,
 	p.innerColor = p.outerColor = nvgRGBA(255,255,255,alpha * 255);
 
 	return p;
+}
+
+NVGpaint nvgColoredImagePattern(NVGcontext* ctx,
+                                float cx, float cy, float w, float h, float angle,
+                                int image, float alpha, NVGcolor iCol)
+{
+    auto p = nvgImagePattern(ctx, cx, cy, w, h, angle, image, alpha);
+
+    p.innerColor = iCol;
+    p.alpha_image = 1;
+
+    return p;
 }
 
 // Scissoring
@@ -3107,7 +3124,7 @@ static int nvg__allocTextAtlas(NVGcontext* ctx)
 			iw *= 2;
 		if (iw > NVG_MAX_FONTIMAGE_SIZE || ih > NVG_MAX_FONTIMAGE_SIZE)
 			iw = ih = NVG_MAX_FONTIMAGE_SIZE;
-		ctx->fontImages[ctx->fontImageIdx+1] = ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_ALPHA, iw, ih, 0, NULL);
+		ctx->fontImages[ctx->fontImageIdx+1] = ctx->params.renderCreateTexture(ctx->params.userPtr, NVG_TEXTURE_ALPHA, iw, ih, 0, NULL, 0, 0);
 	}
 	++ctx->fontImageIdx;
 	fonsResetAtlas(ctx->fs, iw, ih);

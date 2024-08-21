@@ -39,7 +39,9 @@ enum PackType {
     PACK_TYPE,
     PACK_REVERSE,
     PACK_FLAG_TYPE,
-    PACK_OBJECT_STYLE
+    PACK_OBJECT_STYLE,
+    PACK_FLIP_H,
+    PACK_FLIP_V
 };
 
 // This allows us to place 4 int values into a single int to save space and improve speed for CPU->GPU upload
@@ -112,7 +114,8 @@ enum GLNVGshaderType {
     NSVG_DOUBLE_STROKE,
     NSVG_DOUBLE_STROKE_GRAD,
     NSVG_DOUBLE_STROKE_ACTIVITY,
-    NSVG_DOUBLE_STROKE_GRAD_ACTIVITY
+    NSVG_DOUBLE_STROKE_GRAD_ACTIVITY,
+    NSVG_SHADER_ALPHA_IMG
 };
 
 enum GLNVGuniformBindings {
@@ -131,6 +134,7 @@ struct GLNVGtexture {
 	int id;
 	GLuint tex;
 	int width, height;
+    int scaledWidth, scaledHeight;
 	int type;
 	int flags;
     int valid;
@@ -441,7 +445,7 @@ static void glnvg__getUniforms(GLNVGshader* shader)
 	shader->loc[GLNVG_LOC_FRAG] = glGetUniformBlockIndex(shader->prog, "frag");
 }
 
-static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data);
+static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data, int po2H, int po2W);
 
 static int glnvg__renderCreate(void* uptr)
 {
@@ -471,6 +475,7 @@ static int glnvg__renderCreate(void* uptr)
                  << "#define NSVG_DOUBLE_STROKE_GRAD            " << NSVG_DOUBLE_STROKE_GRAD << "\n"
                  << "#define NSVG_DOUBLE_STROKE_ACTIVITY        " << NSVG_DOUBLE_STROKE_ACTIVITY << "\n"
                  << "#define NSVG_DOUBLE_STROKE_GRAD_ACTIVITY   " << NSVG_DOUBLE_STROKE_GRAD_ACTIVITY << "\n"
+                 << "#define NSVG_SHADER_ALPHA_IMG              " << NSVG_SHADER_ALPHA_IMG << "\n"
                  << "\n";
 
 	static char const* fillVertShader = R"(
@@ -514,14 +519,18 @@ static int glnvg__renderCreate(void* uptr)
 	    smooth in vec2 uv;
 	    out vec4 outColor;
 
-        vec4 convertColour(int rgba){
-            vec3 col;
+        vec4 getUnpremultipliedColor(int rgba){
+            vec4 col;
             col.r = float((rgba >> 24) & 0xFF) / 255.0f;
             col.g = float((rgba >> 16) & 0xFF) / 255.0f;
             col.b = float((rgba >> 8) & 0xFF) / 255.0f;
-            float a = float(rgba & 0xFF) / 255.0f;
+            col.a = float(rgba & 0xFF) / 255.0f;
+            return col;
+        }
+        vec4 convertColour(int rgba){
+            vec4 col = getUnpremultipliedColor(rgba);
             // premultiply colour here
-            return vec4((col * a).rgb, a);
+            return vec4((col * col.a).rgb, col.a);
         }
 		float sdroundrect(vec2 pt, vec2 ext, float rad) {
 			vec2 ext2 = ext - vec2(rad,rad);
@@ -783,6 +792,10 @@ static int glnvg__renderCreate(void* uptr)
 				// Combine alpha
 				color *= strokeAlpha * scissor;
 				result = color;
+            } else if (type == NSVG_SHADER_ALPHA_IMG) {
+				vec2 pt = (paintMat * vec3(fpos,1.0f)).xy / extent;
+				float alpha = texture(tex, pt).x;
+				result = vec4(getUnpremultipliedColor(innerCol).rgb * alpha, alpha) * scissor;
 			} else if (type == NSVG_SHADER_SIMPLE) { // Stencil fill
 				result = vec4(1.0f,1.0f,1.0f,1.0f);
 			} else if (type == NSVG_SHADER_IMG) { // Textured tris
@@ -836,7 +849,7 @@ static int glnvg__renderCreate(void* uptr)
 
 	// Some platforms does not allow to have samples to unset textures.
 	// Create empty one which is bound when there's no texture specified.
-	gl->dummyTex = glnvg__renderCreateTexture(gl, NVG_TEXTURE_ALPHA, 1, 1, 0, NULL);
+	gl->dummyTex = glnvg__renderCreateTexture(gl, NVG_TEXTURE_ALPHA, 1, 1, 0, NULL, 0, 0);
 
 	glnvg__checkError(gl, "create done");
 
@@ -845,7 +858,7 @@ static int glnvg__renderCreate(void* uptr)
 	return 1;
 }
 
-static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data)
+static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data, int scaledWidth, int scaledHeight)
 {
 	GLNVGcontext* gl = (GLNVGcontext*)uptr;
 	GLNVGtexture* tex = glnvg__allocTexture(gl);
@@ -855,6 +868,8 @@ static int glnvg__renderCreateTexture(void* uptr, int type, int w, int h, int im
 	glGenTextures(1, &tex->tex);
 	tex->width = w;
 	tex->height = h;
+	tex->scaledWidth = scaledWidth;
+	tex->scaledHeight = scaledHeight;
 	tex->type = type;
 	tex->flags = imageFlags;
 	glnvg__bindTexture(gl, tex->tex);
@@ -1040,14 +1055,34 @@ static int glnvg__convertPaint(GLNVGcontext* gl, GLNVGfragUniforms* frag, NVGpai
 			nvgTransformMultiply(m1, m2);
 			nvgTransformInverse(invxform, m1);
 		} else {
-			nvgTransformInverse(invxform, paint->xform);
+		    if (tex->scaledWidth != 0 && tex->scaledHeight != 0) {
+                float sW = (float)tex->width / tex->scaledWidth;
+                float sH = (float)tex->height / tex->scaledHeight;
+                std::cout << "scale: " << sW << ", " << sH << std::endl;
+                // Initialize matrices
+                float m1[6];
+                // Initialize transformation matrix
+                nvgTransformIdentity(m1);
+                // Apply the scaling transformation to scale up to display size (not power of 2 size)
+                nvgTransformScale(m1, sW, sH);
+                // Apply the paint's transformation
+                nvgTransformMultiply(m1, paint->xform);
+                // Inverse transformation for rendering
+                nvgTransformInverse(invxform, m1);
+            }
+            else
+                nvgTransformInverse(invxform, paint->xform);
 		}
 		frag->stateData |= packStateDataUniform(PACK_TYPE, NSVG_SHADER_FILLIMG);
 
 		if (tex->type == NVG_TEXTURE_RGBA)
 			frag->stateData |= packStateDataUniform(PACK_TEX_TYPE, (tex->flags & NVG_IMAGE_PREMULTIPLIED) ? 0 : 1);
-		else
+		else {
 			frag->stateData |= packStateDataUniform(PACK_TEX_TYPE, 2);
+            if (paint->alpha_image) {
+                frag->stateData |= packStateDataUniform(PACK_TYPE, NSVG_SHADER_ALPHA_IMG);
+            }
+        }
 	}
     else if(paint->rounded_rect) {
         frag->stateData |= packStateDataUniform(PACK_TYPE, NSVG_SHADER_FAST_ROUNDEDRECT);

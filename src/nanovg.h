@@ -105,6 +105,9 @@ struct NVGpaint {
     bool gradient_stroke : 1;
     bool smooth_glow : 1;
     bool connection_activity : 1;
+    bool alpha_image : 1;
+    bool flip_horizontal : 1;
+    bool flip_vertical : 1;
 };
 typedef struct NVGpaint NVGpaint;
 
@@ -445,6 +448,10 @@ float nvgRadToDeg(float rad);
 // Returns handle to the image.
 int nvgCreateImage(NVGcontext* ctx, const char* filename, int imageFlags);
 
+// Creates a single channel alpha image from specified image data.
+// Returns handle to the image.
+int nvgCreateImageAlpha(NVGcontext* ctx, int w, int h, int imageFlags, const unsigned char* data, int pof2W, int pof2H);
+
 // Creates image by loading it from the specified chunk of memory.
 // Returns handle to the image.
 int nvgCreateImageMem(NVGcontext* ctx, int imageFlags, unsigned char* data, int ndata);
@@ -493,6 +500,12 @@ NVGpaint nvgRadialGradient(NVGcontext* ctx, float cx, float cy, float inr, float
 // The gradient is transformed by the current transform when it is passed to nvgFillPaint() or nvgStrokePaint().
 NVGpaint nvgImagePattern(NVGcontext* ctx, float ox, float oy, float ex, float ey,
 						 float angle, int image, float alpha);
+
+// Creates and returns a pattern using the image's alpha and the set color. Parameters (ox,oy) specify the left-top location of the image pattern,
+// (ex,ey) the size of one image, angle rotation around the top-left corner, image is handle to the image to render.
+NVGpaint nvgColoredImagePattern(NVGcontext* ctx,
+                                float cx, float cy, float w, float h, float angle,
+                                int image, float alpha, NVGcolor iCol);
 
 // Creates a dot pattern, that is rendered on shader (used for plugdata canvas background)
 NVGpaint nvgDotPattern(NVGcontext* ctx, NVGcolor icol, NVGcolor ocol, float patternSize, float dotRadius, float feather);
@@ -809,7 +822,7 @@ struct NVGparams {
 	void* userPtr;
 	int edgeAntiAlias;
 	int (*renderCreate)(void* uptr);
-	int (*renderCreateTexture)(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data);
+	int (*renderCreateTexture)(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data, int pW, int pH);
 	int (*renderDeleteTexture)(void* uptr, int image);
 	int (*renderUpdateTexture)(void* uptr, int image, int x, int y, int w, int h, const unsigned char* data);
 	int (*renderGetTextureSize)(void* uptr, int image, int* w, int* h);
