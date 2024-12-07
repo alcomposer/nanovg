@@ -33,6 +33,7 @@ NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imag
 void nvgluGenerateMipmaps(NVGLUframebuffer* fb);
 void nvgluDeleteFramebuffer(NVGLUframebuffer* fb);
 
+//#define NANOVG_GL_IMPLEMENTATION
 #ifdef NANOVG_GL_IMPLEMENTATION
 
 static GLint defaultFBO = -1;
@@ -136,6 +137,137 @@ static void nvgluReadPixels(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y,
     // Unbind the framebuffer to restore the default state
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
+
+static void nvgluAccumulateARGBNoFlip(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* full_fb, int total_width, int total_height, void* data) {
+	const char* vertexShaderSource = R"(
+		#version 150 core
+
+		in vec3 aPos;
+		in vec2 aTexCoord;
+
+		out vec2 TexCoords;
+
+		void main(void) {
+		    gl_Position = vec4(aPos, 1.0);
+		    TexCoords = aTexCoord;
+		}
+	)";
+	const char* fragmentShaderSource = R"(
+		#version 150 core
+
+		in vec2 TexCoords;
+
+		uniform sampler2D texture1;
+
+		void main(void) {
+			vec2 flippedTexCoords = vec2(TexCoords.x, 1.0 - TexCoords.y);
+			gl_FragColor = texture(texture1, flippedTexCoords).bgra;
+
+			//gl_FragColor = vec4(TexCoords.x, TexCoords.y, 1.0, 1.0); // test pattern
+		}
+	)";
+	GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+	glShaderSource(vert, 1, &vertexShaderSource, 0);
+	glCompileShader(vert);
+
+	// Check for compile errors
+	GLint success;
+	glGetShaderiv(vert, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		GLint logLength;
+		glGetShaderiv(vert, GL_INFO_LOG_LENGTH, &logLength);
+		char* log = new char[logLength];
+		glGetShaderInfoLog(vert, logLength, &logLength, log);
+		std::cerr << "Vertex compilation failed:\n" << log << std::endl;
+		delete[] log;
+	}
+
+	GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+	glShaderSource(frag, 1, &fragmentShaderSource, 0);
+	glCompileShader(frag);
+
+	glGetShaderiv(frag, GL_COMPILE_STATUS, &success);
+	if (!success) {
+		GLint logLength;
+		glGetShaderiv(frag, GL_INFO_LOG_LENGTH, &logLength);
+		char* log = new char[logLength];
+		glGetShaderInfoLog(frag, logLength, &logLength, log);
+		std::cerr << "Fragment compilation failed:\n" << log << std::endl;
+		delete[] log;
+	}
+
+	GLuint shaderProgram = glCreateProgram();
+	glAttachShader(shaderProgram, vert);
+	glAttachShader(shaderProgram, frag);
+
+	glBindAttribLocation(shaderProgram, 0, "aPos");
+	glBindAttribLocation(shaderProgram, 1, "aTexCoord");
+
+	glLinkProgram(shaderProgram);
+
+	glDeleteShader(vert);
+	glDeleteShader(frag);
+
+	// Finish Shader setup
+
+    // Render setup
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity(); // Reset ModelView matrix
+
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity(); // Reset Projection matrix
+
+	nvgluBindFramebuffer(full_fb);
+    glViewport(0, 0, total_width, total_height);
+
+    glUseProgram(shaderProgram);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, fb->texture);
+    glUniform1i(glGetUniformLocation(shaderProgram, "uTexture"), 0);
+
+    // Render quad
+    float vertices[] = {
+        // Positions   // Texture Coords
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         1.0f, -1.0f,  1.0f, 0.0f,
+         1.0f,  1.0f,  1.0f, 1.0f,
+        -1.0f,  1.0f,  0.0f, 1.0f,
+    };
+    GLuint indices[] = { 0, 1, 2, 0, 2, 3 };
+    GLuint vao, vbo, ebo;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glGenBuffers(1, &ebo);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    // Read pixels from the ARGB framebuffer
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glReadPixels(0, 0, total_width, total_height, GL_RGBA, GL_UNSIGNED_BYTE, data);
+
+    // Cleanup
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+    glDeleteBuffers(1, &ebo);
+	glDeleteProgram(shaderProgram);
+}
+
 
 
 void nvgluGenerateMipmaps(NVGLUframebuffer* fb)

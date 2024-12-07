@@ -70,6 +70,7 @@ void* nvg__getUptr(void* ctx);
 #define nvgDeleteFramebuffer(fb) nvgluDeleteFramebuffer(fb)
 #define nvgViewport(x, y, w, h) glViewport(x, y, w, h)
 #define nvgReadPixels(nvg, image, x, y, w, h, total_h, data) nvgluReadPixels(nvg, image, x, y, w, h, total_h, data)
+#define nvgAccumulateARGBNoFlip(nvg, image, full, total_w, total_h, data) nvgluAccumulateARGBNoFlip(nvg, image, full, total_w, total_h, data)
 #define nvgBlitFramebuffer(nvg, fb, x, y, w, h) nvgluBlitFramebuffer(nvg, fb, x, y, w, h)
 #define nvgClear(nvg) glDisable(GL_SCISSOR_TEST); \
                       glClearColor(0, 0, 0, 0); \
