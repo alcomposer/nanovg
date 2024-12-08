@@ -33,7 +33,6 @@ NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imag
 void nvgluGenerateMipmaps(NVGLUframebuffer* fb);
 void nvgluDeleteFramebuffer(NVGLUframebuffer* fb);
 
-//#define NANOVG_GL_IMPLEMENTATION
 #ifdef NANOVG_GL_IMPLEMENTATION
 
 static GLint defaultFBO = -1;
@@ -138,7 +137,7 @@ static void nvgluReadPixels(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y,
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-static void nvgluAccumulateARGBNoFlip(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* full_fb, int total_width, int total_height, void* data) {
+static void nvgluAccumulateARGBNoFlip(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* full_fb, int x, int y, int w, int h, int total_width, int total_height, void* data) {
 	const char* vertexShaderSource = R"(
 		#version 150 core
 
@@ -218,6 +217,7 @@ static void nvgluAccumulateARGBNoFlip(NVGcontext* ctx, NVGLUframebuffer* fb, NVG
 	glLoadIdentity(); // Reset Projection matrix
 
 	nvgluBindFramebuffer(full_fb);
+	glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, total_width, total_height);
 
     glUseProgram(shaderProgram);
@@ -258,7 +258,7 @@ static void nvgluAccumulateARGBNoFlip(NVGcontext* ctx, NVGLUframebuffer* fb, NVG
 	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
 	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
-    glReadPixels(0, 0, total_width, total_height, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, data);
 
     // Cleanup
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
