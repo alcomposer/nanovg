@@ -287,10 +287,10 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     NVGLUframebuffer* temp_fb = nvgluCreateFramebuffer(ctx, total_width, total_height, NVG_IMAGE_NEAREST);
 
     // Set sample count for the blur
-    int samples = 20;  // Increase this value for smoother blur
+    int samples = 9;  // Increase this value for smoother blur
 
     // Set level of detail for mipmap sampling (0 for base level)
-    int LOD = 0;
+    int LOD = 2;
 
     for (int i = 0; i < 2; ++i) { // Horizontal pass, then vertical pass
         glUniform1f(blurAmountLocation, blurAmount);
