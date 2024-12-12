@@ -885,7 +885,7 @@ int nvg__renderCreate(void* uptr)
                 if (texType == 1) color = vec4(color.xyz*color.w,color.w);
                 if (texType == 2) color = vec4(color.x);
                 if (texType == 3) color = color.bgra; // swizzle for JUCE colour image
-                outColor = color * strokeAlpha * scissor;
+                outColor = color * strokeAlpha * scissor * convertColour(innerCol);
                 return;
             }
             case NSVG_SHADER_FILLIMG_ALPHA: {

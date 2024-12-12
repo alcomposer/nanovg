@@ -45,8 +45,13 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
 
     int x2 = x + w;
     int y2 = y + h;
+
+	// Store the currently bound draw framebuffer
+	GLint currentDrawFBO;
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentDrawFBO);
+
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFBO);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glFinish();
@@ -56,7 +61,7 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
         printf("OpenGL Error after glBlitFramebuffer: %d\n", error);
     }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
+    //glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
 
     glEnable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);
@@ -120,7 +125,9 @@ error:
 
 void nvgluBindFramebuffer(NVGLUframebuffer* fb)
 {
-	if (defaultFBO == -1) glGetIntegerv(GL_FRAMEBUFFER_BINDING, &defaultFBO);
+	if (defaultFBO == -1)
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &defaultFBO);
+
 	glBindFramebuffer(GL_FRAMEBUFFER, fb != NULL ? fb->fbo : defaultFBO);
 }
 
@@ -161,6 +168,161 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	fb->image = -1;
 	free(fb);
 }
+
+static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int total_width, int total_height, float blurAmount, float alpha) {
+    // Vertex Shader
+    const char* vertexShaderSource = R"(
+        #version 150 core
+
+        in vec3 aPos;
+        in vec2 aTexCoord;
+
+        out vec2 TexCoords;
+
+        void main(void) {
+            gl_Position = vec4(aPos, 1.0);
+            TexCoords = aTexCoord;
+        }
+    )";
+
+    // Fragment Shader
+    const char* fragmentShaderSource = R"(
+        #version 150 core
+
+        in vec2 TexCoords;
+        uniform sampler2D texture1;
+        uniform float blurAmount;   // Control the blur intensity
+        uniform int samples;        // Number of blur samples
+        uniform int LOD;            // Level of detail (for mipmap sampling)
+		uniform float alpha;
+
+        // Gaussian function to calculate weight
+        float gaussian(vec2 i, float sigma) {
+            return exp(-0.5 * dot(i /= sigma, i)) / (6.28 * sigma * sigma);
+        }
+
+        // Perform Gaussian blur by sampling around the pixel
+        vec4 blur(sampler2D sp, vec2 U, vec2 scale, int samples, float sigma) {
+            vec4 color = vec4(0.0);
+            float weightSum = 0.0;
+
+            // Perform blur in a grid around the current pixel
+            for (int x = -samples; x <= samples; x++) {
+                for (int y = -samples; y <= samples; y++) {
+                    vec2 offset = vec2(x, y) * scale;
+                    float weight = gaussian(vec2(x, y), sigma);
+                    color += weight * textureLod(sp, U + offset, float(LOD));
+                    weightSum += weight;
+                }
+            }
+
+            // Normalize the accumulated color
+            return color / weightSum;
+        }
+
+        void main(void) {
+            vec2 scale = 1.0 / textureSize(texture1, 0); // Normalized texel size
+            float sigma = blurAmount * 0.8;  // Adjust blur intensity with blurAmount
+            gl_FragColor = vec4(blur(texture1, TexCoords, scale, samples, sigma).rgb * alpha, alpha);
+        }
+    )";
+
+    // Compile shaders
+    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vert, 1, &vertexShaderSource, nullptr);
+    glCompileShader(vert);
+
+    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(frag, 1, &fragmentShaderSource, nullptr);
+    glCompileShader(frag);
+
+    GLuint shaderProgram = glCreateProgram();
+    glAttachShader(shaderProgram, vert);
+    glAttachShader(shaderProgram, frag);
+    glBindAttribLocation(shaderProgram, 0, "aPos");
+    glBindAttribLocation(shaderProgram, 1, "aTexCoord");
+    glLinkProgram(shaderProgram);
+
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+
+    // Prepare for rendering
+    GLuint vao, vbo, ebo;
+    glGenVertexArrays(1, &vao);
+    glGenBuffers(1, &vbo);
+    glGenBuffers(1, &ebo);
+
+    float vertices[] = {
+        // Positions       // Texture Coords
+        -1.0f, -1.0f,      0.0f, 0.0f,
+         1.0f, -1.0f,      1.0f, 0.0f,
+         1.0f,  1.0f,      1.0f, 1.0f,
+        -1.0f,  1.0f,      0.0f, 1.0f,
+    };
+    GLuint indices[] = { 0, 1, 2, 0, 2, 3 };
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // Blur passes
+	GLint currentProgram;
+	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
+
+    glUseProgram(shaderProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);
+    GLuint blurAmountLocation = glGetUniformLocation(shaderProgram, "blurAmount");
+    GLuint samplesLocation = glGetUniformLocation(shaderProgram, "samples");
+    GLuint LODLocation = glGetUniformLocation(shaderProgram, "LOD");
+	GLuint alphaLocation = glGetUniformLocation(shaderProgram, "alpha");
+
+    NVGLUframebuffer* temp_fb = nvgluCreateFramebuffer(ctx, total_width, total_height, NVG_IMAGE_NEAREST);
+
+    // Set sample count for the blur
+    int samples = 20;  // Increase this value for smoother blur
+
+    // Set level of detail for mipmap sampling (0 for base level)
+    int LOD = 0;
+
+    for (int i = 0; i < 2; ++i) { // Horizontal pass, then vertical pass
+        glUniform1f(blurAmountLocation, blurAmount);
+        glUniform1i(samplesLocation, samples);
+        glUniform1i(LODLocation, LOD);
+    	glUniform1f(alphaLocation, alpha);
+
+        if (i == 0) {
+            nvgluBindFramebuffer(temp_fb);
+            glBindTexture(GL_TEXTURE_2D, fb->texture);
+        } else {
+            nvgluBindFramebuffer(fb);
+            glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+        }
+
+        glViewport(0, 0, total_width, total_height);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+
+    // Cleanup
+    nvgluDeleteFramebuffer(temp_fb);
+    glDeleteVertexArrays(1, &vao);
+    glDeleteBuffers(1, &vbo);
+    glDeleteBuffers(1, &ebo);
+    glDeleteProgram(shaderProgram);
+
+	// Reset the previous shader program
+	glUseProgram(currentProgram);
+}
+
+
+
 
 #endif // NANOVG_GL_IMPLEMENTATION
 #endif // NANOVG_GL_UTILS_H
