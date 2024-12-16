@@ -169,19 +169,31 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	free(fb);
 }
 
-static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int total_width, int total_height, float blurAmount, float alpha) {
+static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* temp_fb, int total_width, int total_height, float blurStrength) {
+
+	// Multi-pass blur vert & frag implemented from: http://www.sunsetlakesoftware.com/2013/10/21/optimizing-gaussian-blurs-mobile-gpu/index.html
+
     // Vertex Shader
     const char* vertexShaderSource = R"(
         #version 150 core
 
-        in vec3 aPos;
-        in vec2 aTexCoord;
+        in vec4 position;
+        in vec2 inputTextureCoordinate;
 
-        out vec2 TexCoords;
+        uniform float texelWidthOffset;
+        uniform float texelHeightOffset;
 
-        void main(void) {
-            gl_Position = vec4(aPos, 1.0);
-            TexCoords = aTexCoord;
+        out vec2 blurCoordinates[5];
+
+        void main() {
+            gl_Position = position;
+
+            vec2 singleStepOffset = vec2(texelWidthOffset, texelHeightOffset);
+            blurCoordinates[0] = inputTextureCoordinate.xy;
+            blurCoordinates[1] = inputTextureCoordinate.xy + singleStepOffset * 1.407333;
+            blurCoordinates[2] = inputTextureCoordinate.xy - singleStepOffset * 1.407333;
+            blurCoordinates[3] = inputTextureCoordinate.xy + singleStepOffset * 3.294215;
+            blurCoordinates[4] = inputTextureCoordinate.xy - singleStepOffset * 3.294215;
         }
     )";
 
@@ -189,41 +201,19 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     const char* fragmentShaderSource = R"(
         #version 150 core
 
-        in vec2 TexCoords;
-        uniform sampler2D texture1;
-        uniform float blurAmount;   // Control the blur intensity
-        uniform int samples;        // Number of blur samples
-        uniform int LOD;            // Level of detail (for mipmap sampling)
-		uniform float alpha;
+        in vec2 blurCoordinates[5];
+        out vec4 FragColor;
 
-        // Gaussian function to calculate weight
-        float gaussian(vec2 i, float sigma) {
-            return exp(-0.5 * dot(i /= sigma, i)) / (6.28 * sigma * sigma);
-        }
+        uniform sampler2D inputImageTexture;
 
-        // Perform Gaussian blur by sampling around the pixel
-        vec4 blur(sampler2D sp, vec2 U, vec2 scale, int samples, float sigma) {
-            vec4 color = vec4(0.0);
-            float weightSum = 0.0;
-
-            // Perform blur in a grid around the current pixel
-            for (int x = -samples; x <= samples; x++) {
-                for (int y = -samples; y <= samples; y++) {
-                    vec2 offset = vec2(x, y) * scale;
-                    float weight = gaussian(vec2(x, y), sigma);
-                    color += weight * textureLod(sp, U + offset, float(LOD));
-                    weightSum += weight;
-                }
-            }
-
-            // Normalize the accumulated color
-            return color / weightSum;
-        }
-
-        void main(void) {
-            vec2 scale = 1.0 / textureSize(texture1, 0); // Normalized texel size
-            float sigma = blurAmount * 0.8;  // Adjust blur intensity with blurAmount
-            gl_FragColor = vec4(blur(texture1, TexCoords, scale, samples, sigma).rgb * alpha, alpha);
+        void main() {
+            vec4 sum = vec4(0.0);
+            sum += texture(inputImageTexture, blurCoordinates[0]) * 0.204164;
+            sum += texture(inputImageTexture, blurCoordinates[1]) * 0.304005;
+            sum += texture(inputImageTexture, blurCoordinates[2]) * 0.304005;
+            sum += texture(inputImageTexture, blurCoordinates[3]) * 0.093913;
+            sum += texture(inputImageTexture, blurCoordinates[4]) * 0.093913;
+            FragColor = sum;
         }
     )";
 
@@ -232,32 +222,56 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     glShaderSource(vert, 1, &vertexShaderSource, nullptr);
     glCompileShader(vert);
 
+    GLint vertSuccess;
+    glGetShaderiv(vert, GL_COMPILE_STATUS, &vertSuccess);
+    if (!vertSuccess) {
+        char infoLog[512];
+        glGetShaderInfoLog(vert, 512, nullptr, infoLog);
+        fprintf(stderr, "Vertex Shader Compilation Failed:\n%s\n", infoLog);
+    }
+
     GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
     glShaderSource(frag, 1, &fragmentShaderSource, nullptr);
     glCompileShader(frag);
 
+    GLint fragSuccess;
+    glGetShaderiv(frag, GL_COMPILE_STATUS, &fragSuccess);
+    if (!fragSuccess) {
+        char infoLog[512];
+        glGetShaderInfoLog(frag, 512, nullptr, infoLog);
+        fprintf(stderr, "Fragment Shader Compilation Failed:\n%s\n", infoLog);
+    }
+
     GLuint shaderProgram = glCreateProgram();
     glAttachShader(shaderProgram, vert);
     glAttachShader(shaderProgram, frag);
-    glBindAttribLocation(shaderProgram, 0, "aPos");
-    glBindAttribLocation(shaderProgram, 1, "aTexCoord");
+    glBindAttribLocation(shaderProgram, 0, "position");
+    glBindAttribLocation(shaderProgram, 1, "inputTextureCoordinate");
     glLinkProgram(shaderProgram);
+
+    GLint programSuccess;
+    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &programSuccess);
+    if (!programSuccess) {
+        char infoLog[512];
+        glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
+        fprintf(stderr, "Shader Program Linking Failed:\n%s\n", infoLog);
+    }
 
     glDeleteShader(vert);
     glDeleteShader(frag);
 
-    // Prepare for rendering
+    // Quad setup
     GLuint vao, vbo, ebo;
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
     glGenBuffers(1, &ebo);
 
     float vertices[] = {
-        // Positions       // Texture Coords
-        -1.0f, -1.0f,      0.0f, 0.0f,
-         1.0f, -1.0f,      1.0f, 0.0f,
-         1.0f,  1.0f,      1.0f, 1.0f,
-        -1.0f,  1.0f,      0.0f, 1.0f,
+        // Positions      // Texture Coords
+        -1.0f, -1.0f,     0.0f, 0.0f,
+         1.0f, -1.0f,     1.0f, 0.0f,
+         1.0f,  1.0f,     1.0f, 1.0f,
+        -1.0f,  1.0f,     0.0f, 1.0f,
     };
     GLuint indices[] = { 0, 1, 2, 0, 2, 3 };
 
@@ -272,56 +286,50 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Blur passes
-	GLint currentProgram;
-	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
-
+    // Setup for rendering
+    GLint currentProgram;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
     glUseProgram(shaderProgram);
     glActiveTexture(GL_TEXTURE0);
-    glUniform1i(glGetUniformLocation(shaderProgram, "texture1"), 0);
-    GLuint blurAmountLocation = glGetUniformLocation(shaderProgram, "blurAmount");
-    GLuint samplesLocation = glGetUniformLocation(shaderProgram, "samples");
-    GLuint LODLocation = glGetUniformLocation(shaderProgram, "LOD");
-	GLuint alphaLocation = glGetUniformLocation(shaderProgram, "alpha");
+    glUniform1i(glGetUniformLocation(shaderProgram, "inputImageTexture"), 0);
 
-    NVGLUframebuffer* temp_fb = nvgluCreateFramebuffer(ctx, total_width, total_height, NVG_IMAGE_NEAREST);
+    GLuint texelWidthOffsetLoc = glGetUniformLocation(shaderProgram, "texelWidthOffset");
+    GLuint texelHeightOffsetLoc = glGetUniformLocation(shaderProgram, "texelHeightOffset");
 
-    // Set sample count for the blur
-    int samples = 9;  // Increase this value for smoother blur
+    // Perform 8 passes (4 horizontal, 4 vertical)
+    for (int i = 0; i < 4; ++i) {
+		float index = static_cast<float>(pow(2, i)) * std::min(blurStrength, 1.0f);
 
-    // Set level of detail for mipmap sampling (0 for base level)
-    int LOD = 2;
+	    // Horizontal pass
+    	nvgluBindFramebuffer(temp_fb);
+    	glBindTexture(GL_TEXTURE_2D, fb->texture);
 
-    for (int i = 0; i < 2; ++i) { // Horizontal pass, then vertical pass
-        glUniform1f(blurAmountLocation, blurAmount);
-        glUniform1i(samplesLocation, samples);
-        glUniform1i(LODLocation, LOD);
-    	glUniform1f(alphaLocation, alpha);
+    	glUniform1f(texelWidthOffsetLoc, index / total_width);
+    	glUniform1f(texelHeightOffsetLoc, 0.0f);
 
-        if (i == 0) {
-            nvgluBindFramebuffer(temp_fb);
-            glBindTexture(GL_TEXTURE_2D, fb->texture);
-        } else {
-            nvgluBindFramebuffer(fb);
-            glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
-        }
+    	glViewport(0, 0, total_width, total_height);
+    	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-        glViewport(0, 0, total_width, total_height);
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    	// Vertical pass
+    	nvgluBindFramebuffer(fb);
+    	glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+
+    	glUniform1f(texelWidthOffsetLoc, 0.0f);
+    	glUniform1f(texelHeightOffsetLoc, index / total_height);
+
+    	glViewport(0, 0, total_width, total_height);
+    	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
     // Cleanup
-    nvgluDeleteFramebuffer(temp_fb);
     glDeleteVertexArrays(1, &vao);
     glDeleteBuffers(1, &vbo);
     glDeleteBuffers(1, &ebo);
     glDeleteProgram(shaderProgram);
 
-	// Reset the previous shader program
-	glUseProgram(currentProgram);
+    // Restore the previous program
+    glUseProgram(currentProgram);
 }
-
-
 
 
 #endif // NANOVG_GL_IMPLEMENTATION
