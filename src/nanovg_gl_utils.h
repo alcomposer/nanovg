@@ -195,10 +195,10 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
 
             vec2 singleStepOffset = vec2(texelWidthOffset, texelHeightOffset);
             blurCoordinates[0] = inputTextureCoordinate.xy;
-            blurCoordinates[1] = inputTextureCoordinate.xy + singleStepOffset * 1.407333;
-            blurCoordinates[2] = inputTextureCoordinate.xy - singleStepOffset * 1.407333;
-            blurCoordinates[3] = inputTextureCoordinate.xy + singleStepOffset * 3.294215;
-            blurCoordinates[4] = inputTextureCoordinate.xy - singleStepOffset * 3.294215;
+            blurCoordinates[1] = inputTextureCoordinate.xy + singleStepOffset * 1.407333f;
+            blurCoordinates[2] = inputTextureCoordinate.xy - singleStepOffset * 1.407333f;
+            blurCoordinates[3] = inputTextureCoordinate.xy + singleStepOffset * 3.294215f;
+            blurCoordinates[4] = inputTextureCoordinate.xy - singleStepOffset * 3.294215f;
         }
     )";
 
@@ -212,12 +212,16 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         uniform sampler2D inputImageTexture;
 
         vec3 sRGBToLinear(vec3 color) {
-            return pow(color, vec3(2.2));
+            return pow(color, vec3(2.2f));
+        }
+
+        vec3 sRGBToLinear_Approx(vec3 color) {
+            return color * color;
         }
 
         void main() {
             vec3 color = texture(inputImageTexture, TexCoord).rgb;
-            FragColor = vec4(sRGBToLinear(color), 1.0);
+            FragColor = vec4(sRGBToLinear_Approx(color), 1.0f);
         }
     )";
 
@@ -230,12 +234,12 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         uniform sampler2D inputImageTexture;
 
         void main() {
-            vec4 sum = vec4(0.0);
-            sum += texture(inputImageTexture, blurCoordinates[0]) * 0.204164;
-            sum += texture(inputImageTexture, blurCoordinates[1]) * 0.304005;
-            sum += texture(inputImageTexture, blurCoordinates[2]) * 0.304005;
-            sum += texture(inputImageTexture, blurCoordinates[3]) * 0.093913;
-            sum += texture(inputImageTexture, blurCoordinates[4]) * 0.093913;
+            vec4 sum = vec4(0.0f);
+            sum += texture(inputImageTexture, blurCoordinates[0]) * 0.204164f;
+            sum += texture(inputImageTexture, blurCoordinates[1]) * 0.304005f;
+            sum += texture(inputImageTexture, blurCoordinates[2]) * 0.304005f;
+            sum += texture(inputImageTexture, blurCoordinates[3]) * 0.093913f;
+            sum += texture(inputImageTexture, blurCoordinates[4]) * 0.093913f;
             FragColor = sum;
         }
     )";
@@ -249,12 +253,16 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         uniform sampler2D inputImageTexture;
 
         vec3 linearToSRGB(vec3 color) {
-            return pow(color, vec3(1.0 / 2.2));
+            return pow(color, vec3(1.0f / 2.2f));
+        }
+
+        vec3 linearToSRGB_Approx(vec3 color) {
+            return sqrt(color);
         }
 
         void main() {
             vec3 color = texture(inputImageTexture, TexCoord).rgb;
-            FragColor = vec4(linearToSRGB(color), 1.0);
+            FragColor = vec4(linearToSRGB_Approx(color), 1.0f);
         }
     )";
 
@@ -341,12 +349,11 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
+	// Bind the vertex attributes to the vertex shader - TODO: Use getLocation so it's clearer
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
-
-
 
 	GLint currentProgram;
 	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
@@ -363,8 +370,18 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
     GLuint texelWidthOffsetLoc = glGetUniformLocation(blurShader, "texelWidthOffset");
     GLuint texelHeightOffsetLoc = glGetUniformLocation(blurShader, "texelHeightOffset");
 
-    for (int i = 0; i < 4; ++i) {
-        float index = static_cast<float>(pow(2, i)) * std::min(blurStrength, 1.0f);
+#ifdef FIB_PASSES
+	// Fibonacci blur pass offsets
+	const int passes = 6;
+	const int blurPassOffset[passes] = { 1, 1, 2, 3, 5, 8 };
+#else
+	// Power of 2 blur pass offsets
+	const int passes = 4;
+	const int blurPassOffset[passes] = { 1, 2, 4, 8 };
+#endif
+
+    for (int i = 0; i < passes; ++i) {
+        float index = blurPassOffset[i] * std::min(blurStrength, 1.0f);
 
         // Horizontal pass
         nvgluBindFramebuffer(fb);
