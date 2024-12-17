@@ -71,7 +71,7 @@ void* nvg__getUptr(void* ctx);
 #define nvgViewport(x, y, w, h) glViewport(x, y, w, h)
 #define nvgReadPixels(nvg, image, x, y, w, h, total_h, data) nvgluReadPixels(nvg, image, x, y, w, h, total_h, data)
 #define nvgBlurFramebuffer(ctx, fb, temp_fb, total_width, total_height, blurAmount) nvgluBlurFramebuffer(ctx, fb, temp_fb, total_width, total_height, blurAmount)
-#define nvgBlitFramebuffer(nvg, fb, x, y, w, h) nvgluBlitFramebuffer(nvg, fb, x, y, w, h)
+#define nvgBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh) nvgluBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh)
 #define nvgClear(nvg) glDisable(GL_SCISSOR_TEST); \
                       glClearColor(0, 0, 0, 0); \
                       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT); \
@@ -224,6 +224,7 @@ enum NVGimageFlags {
 	NVG_IMAGE_FLIPY				= 1<<3,		// Flips (inverses) image in Y direction when rendered.
 	NVG_IMAGE_PREMULTIPLIED		= 1<<4,		// Image data has premultiplied alpha.
 	NVG_IMAGE_NEAREST			= 1<<5,		// Image interpolation is Nearest instead Linear
+	NVG_IMAGE_FLOAT         	= 1<<6,		// Image saved in float format - needed for feedback effects
 };
 
 // Begin drawing a new frame

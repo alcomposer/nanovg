@@ -37,14 +37,14 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb);
 
 static GLint defaultFBO = -1;
 
-void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, int w, int h)
+void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
 {
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
-    int x2 = x + w;
-    int y2 = y + h;
+    //int x2 = x + w;
+    //int y2 = y + h;
 
 	// Store the currently bound draw framebuffer
 	GLint currentDrawFBO;
@@ -53,7 +53,7 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBlitFramebuffer(sx, sy, sw, sh, dx, dy, dw, dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glFinish();
 
     GLenum error = glGetError();
@@ -169,11 +169,13 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	free(fb);
 }
 
+#endif
+
+#define NANOVG_GL_IMPLEMENTATION
+#ifdef NANOVG_GL_IMPLEMENTATION
+
 static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* temp_fb, int total_width, int total_height, float blurStrength) {
-
-	// Multi-pass blur vert & frag implemented from: http://www.sunsetlakesoftware.com/2013/10/21/optimizing-gaussian-blurs-mobile-gpu/index.html
-
-    // Vertex Shader
+    // Shader sources
     const char* vertexShaderSource = R"(
         #version 150 core
 
@@ -184,9 +186,12 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         uniform float texelHeightOffset;
 
         out vec2 blurCoordinates[5];
+		out vec2 TexCoord;
 
         void main() {
             gl_Position = position;
+
+			TexCoord = inputTextureCoordinate;
 
             vec2 singleStepOffset = vec2(texelWidthOffset, texelHeightOffset);
             blurCoordinates[0] = inputTextureCoordinate.xy;
@@ -197,8 +202,26 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         }
     )";
 
-    // Fragment Shader
-    const char* fragmentShaderSource = R"(
+    const char* sRGBToLinearFragmentShader = R"(
+        #version 150 core
+
+		in vec2 TexCoord;
+
+        out vec4 FragColor;
+
+        uniform sampler2D inputImageTexture;
+
+        vec3 sRGBToLinear(vec3 color) {
+            return pow(color, vec3(2.2));
+        }
+
+        void main() {
+            vec3 color = texture(inputImageTexture, TexCoord).rgb;
+            FragColor = vec4(sRGBToLinear(color), 1.0);
+        }
+    )";
+
+    const char* blurFragmentShader = R"(
         #version 150 core
 
         in vec2 blurCoordinates[5];
@@ -217,50 +240,87 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         }
     )";
 
-    // Compile shaders
-    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vert, 1, &vertexShaderSource, nullptr);
-    glCompileShader(vert);
+    const char* linearToSRGBFragmentShader = R"(
+        #version 150 core
 
-    GLint vertSuccess;
-    glGetShaderiv(vert, GL_COMPILE_STATUS, &vertSuccess);
-    if (!vertSuccess) {
-        char infoLog[512];
-        glGetShaderInfoLog(vert, 512, nullptr, infoLog);
-        fprintf(stderr, "Vertex Shader Compilation Failed:\n%s\n", infoLog);
-    }
+        in vec2 TexCoord;
+        out vec4 FragColor;
 
-    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(frag, 1, &fragmentShaderSource, nullptr);
-    glCompileShader(frag);
+        uniform sampler2D inputImageTexture;
 
-    GLint fragSuccess;
-    glGetShaderiv(frag, GL_COMPILE_STATUS, &fragSuccess);
-    if (!fragSuccess) {
-        char infoLog[512];
-        glGetShaderInfoLog(frag, 512, nullptr, infoLog);
-        fprintf(stderr, "Fragment Shader Compilation Failed:\n%s\n", infoLog);
-    }
+        vec3 linearToSRGB(vec3 color) {
+            return pow(color, vec3(1.0 / 2.2));
+        }
 
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vert);
-    glAttachShader(shaderProgram, frag);
-    glBindAttribLocation(shaderProgram, 0, "position");
-    glBindAttribLocation(shaderProgram, 1, "inputTextureCoordinate");
-    glLinkProgram(shaderProgram);
+        void main() {
+            vec3 color = texture(inputImageTexture, TexCoord).rgb;
+            FragColor = vec4(linearToSRGB(color), 1.0);
+        }
+    )";
 
-    GLint programSuccess;
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &programSuccess);
-    if (!programSuccess) {
-        char infoLog[512];
-        glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-        fprintf(stderr, "Shader Program Linking Failed:\n%s\n", infoLog);
-    }
+    // Compile and link shaders
+    auto compileShader = [](const char *vertSource, const char *fragSource) {
+	    // Create and compile vertex shader
+	    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+	    glShaderSource(vertexShader, 1, &vertSource, nullptr);
+	    glCompileShader(vertexShader);
 
-    glDeleteShader(vert);
-    glDeleteShader(frag);
+	    // Check for vertex shader compilation errors
+	    GLint vertexCompiled;
+	    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &vertexCompiled);
+	    if (!vertexCompiled) {
+		    GLint logLength;
+		    glGetShaderiv(vertexShader, GL_INFO_LOG_LENGTH, &logLength);
+		    std::vector<GLchar> log(logLength);
+		    glGetShaderInfoLog(vertexShader, logLength, nullptr, log.data());
+		    std::cerr << "Vertex Shader Compilation Error:\n" << log.data() << std::endl;
+	    }
 
-    // Quad setup
+	    // Create and compile fragment shader
+	    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+	    glShaderSource(fragmentShader, 1, &fragSource, nullptr);
+	    glCompileShader(fragmentShader);
+
+	    // Check for fragment shader compilation errors
+	    GLint fragmentCompiled;
+	    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &fragmentCompiled);
+	    if (!fragmentCompiled) {
+		    GLint logLength;
+		    glGetShaderiv(fragmentShader, GL_INFO_LOG_LENGTH, &logLength);
+		    std::vector<GLchar> log(logLength);
+		    glGetShaderInfoLog(fragmentShader, logLength, nullptr, log.data());
+		    std::cerr << "Fragment Shader Compilation Error:\n" << log.data() << std::endl;
+	    }
+
+	    // Create and link shader program
+	    GLuint program = glCreateProgram();
+	    glAttachShader(program, vertexShader);
+	    glAttachShader(program, fragmentShader);
+	    glLinkProgram(program);
+
+	    // Check for linking errors
+	    GLint programLinked;
+	    glGetProgramiv(program, GL_LINK_STATUS, &programLinked);
+	    if (!programLinked) {
+		    GLint logLength;
+		    glGetProgramiv(program, GL_INFO_LOG_LENGTH, &logLength);
+		    std::vector<GLchar> log(logLength);
+		    glGetProgramInfoLog(program, logLength, nullptr, log.data());
+		    std::cerr << "Shader Program Linking Error:\n" << log.data() << std::endl;
+	    }
+
+	    // Clean up shaders
+	    glDeleteShader(vertexShader);
+	    glDeleteShader(fragmentShader);
+
+	    return program;
+    };
+
+    GLuint sRGBToLinearShader = compileShader(vertexShaderSource, sRGBToLinearFragmentShader);
+    GLuint blurShader = compileShader(vertexShaderSource, blurFragmentShader);
+    GLuint linearToSRGBShader = compileShader(vertexShaderSource, linearToSRGBFragmentShader);
+
+    // Setup quad
     GLuint vao, vbo, ebo;
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
@@ -286,51 +346,61 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // Setup for rendering
-    GLint currentProgram;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
-    glUseProgram(shaderProgram);
-    glActiveTexture(GL_TEXTURE0);
-    glUniform1i(glGetUniformLocation(shaderProgram, "inputImageTexture"), 0);
 
-    GLuint texelWidthOffsetLoc = glGetUniformLocation(shaderProgram, "texelWidthOffset");
-    GLuint texelHeightOffsetLoc = glGetUniformLocation(shaderProgram, "texelHeightOffset");
 
-    // Perform 8 passes (4 horizontal, 4 vertical)
+	GLint currentProgram;
+	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
+
+    // Step 1: Convert sRGB to Linear Space
+	glUseProgram(sRGBToLinearShader);
+    nvgluBindFramebuffer(temp_fb);
+    glBindTexture(GL_TEXTURE_2D, fb->texture);
+    glViewport(0, 0, total_width, total_height);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
+    // Step 2: Perform Blur in Linear Space (Blur can only be applied correctly in linear space)
+    glUseProgram(blurShader);
+    GLuint texelWidthOffsetLoc = glGetUniformLocation(blurShader, "texelWidthOffset");
+    GLuint texelHeightOffsetLoc = glGetUniformLocation(blurShader, "texelHeightOffset");
+
     for (int i = 0; i < 4; ++i) {
-		float index = static_cast<float>(pow(2, i)) * std::min(blurStrength, 1.0f);
+        float index = static_cast<float>(pow(2, i)) * std::min(blurStrength, 1.0f);
 
-	    // Horizontal pass
-    	nvgluBindFramebuffer(temp_fb);
-    	glBindTexture(GL_TEXTURE_2D, fb->texture);
+        // Horizontal pass
+        nvgluBindFramebuffer(fb);
+        glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+        glUniform1f(texelWidthOffsetLoc, index / total_width);
+        glUniform1f(texelHeightOffsetLoc, 0.0f);
+        glViewport(0, 0, total_width, total_height);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
-    	glUniform1f(texelWidthOffsetLoc, index / total_width);
-    	glUniform1f(texelHeightOffsetLoc, 0.0f);
-
-    	glViewport(0, 0, total_width, total_height);
-    	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
-    	// Vertical pass
-    	nvgluBindFramebuffer(fb);
-    	glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
-
-    	glUniform1f(texelWidthOffsetLoc, 0.0f);
-    	glUniform1f(texelHeightOffsetLoc, index / total_height);
-
-    	glViewport(0, 0, total_width, total_height);
-    	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        // Vertical pass
+        nvgluBindFramebuffer(temp_fb);
+        glBindTexture(GL_TEXTURE_2D, fb->texture);
+        glUniform1f(texelWidthOffsetLoc, 0.0f);
+        glUniform1f(texelHeightOffsetLoc, index / total_height);
+        glViewport(0, 0, total_width, total_height);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
+    // Step 3: Convert Linear Space Back to sRGB
+	glUseProgram(linearToSRGBShader);
+    nvgluBindFramebuffer(fb);
+    glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+    glViewport(0, 0, total_width, total_height);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+
     // Cleanup
+    glDeleteProgram(sRGBToLinearShader);
+    glDeleteProgram(blurShader);
+    glDeleteProgram(linearToSRGBShader);
     glDeleteVertexArrays(1, &vao);
     glDeleteBuffers(1, &vbo);
     glDeleteBuffers(1, &ebo);
-    glDeleteProgram(shaderProgram);
 
-    // Restore the previous program
-    glUseProgram(currentProgram);
+	// Restore the previous program
+	glUseProgram(currentProgram);
 }
-
 
 #endif // NANOVG_GL_IMPLEMENTATION
 #endif // NANOVG_GL_UTILS_H

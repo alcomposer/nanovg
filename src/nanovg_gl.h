@@ -427,8 +427,7 @@ static void glnvg__updateTexPixelStoreiVals(int alignement, int x, int y, int w)
 }
 
 
-int nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data)
-{
+int nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags, const unsigned char* data) {
     GLNVGcontext* gl = (GLNVGcontext*)uptr;
     GLNVGtexture* tex = glnvg__allocTexture(gl);
 
@@ -443,10 +442,14 @@ int nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags,
 
     glnvg__updateTexPixelStoreiVals(4, 0, 0, 0);
 
-    if (type == NVG_TEXTURE_RGBA || type == NVG_TEXTURE_ARGB)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-    else
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
+    if (type == NVG_TEXTURE_RGBA || type == NVG_TEXTURE_ARGB) {
+        if (imageFlags & NVG_IMAGE_FLOAT)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, data);
+        else
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+    } else {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, imageFlags & NVG_IMAGE_FLOAT ? GL_FLOAT : GL_UNSIGNED_BYTE, data);
+    }
 
     if (imageFlags & NVG_IMAGE_GENERATE_MIPMAPS) {
         if (imageFlags & NVG_IMAGE_NEAREST) {
