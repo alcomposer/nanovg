@@ -358,6 +358,8 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
 	GLint currentProgram;
 	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
 
+	glDisable(GL_SCISSOR_TEST);
+
     // Step 1: Convert sRGB to Linear Space
 	glUseProgram(sRGBToLinearShader);
     nvgluBindFramebuffer(temp_fb);
@@ -417,6 +419,7 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
 
 	// Restore the previous program
 	glUseProgram(currentProgram);
+	glEnable(GL_SCISSOR_TEST);
 }
 
 #endif // NANOVG_GL_IMPLEMENTATION
