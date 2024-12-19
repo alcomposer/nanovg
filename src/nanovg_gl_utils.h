@@ -22,8 +22,12 @@ struct NVGLUframebuffer {
 	NVGcontext* ctx;
 	GLuint fbo;
 	GLuint rbo;
-	GLuint texture;
+	GLuint texture;  // Colour attachment 0
+	GLuint texture2; // Colour attachment 1
 	int image;
+	int image2;
+	int width = 0;
+	int height = 0;
 };
 typedef struct NVGLUframebuffer NVGLUframebuffer;
 
@@ -46,6 +50,9 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
     //int x2 = x + w;
     //int y2 = y + h;
 
+	sy = fb->height - sy - sh;
+	dy = fb->height - dy - dh;
+
 	// Store the currently bound draw framebuffer
 	GLint currentDrawFBO;
 	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &currentDrawFBO);
@@ -53,7 +60,14 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glBlitFramebuffer(sx, sy, sw, sh, dx, dy, dw, dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	glBlitFramebuffer(
+		sx, sy,                      // Source lower-left corner
+		sx + sw, sy + sh,            // Source upper-right corner
+		dx, dy,                      // Destination lower-left corner
+		dx + dw, dy + dh,            // Destination upper-right corner
+		GL_COLOR_BUFFER_BIT,         // Copy color buffer
+		GL_NEAREST
+	);
     glFinish();
 
     GLenum error = glGetError();
@@ -70,6 +84,8 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
 
 NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imageFlags)
 {
+	bool doubleColAtt = imageFlags & NVG_DOUBLE_COLOUR_ATTACH;
+
 	GLint defaultFBO;
 	GLint defaultRBO;
 	NVGLUframebuffer* fb = NULL;
@@ -81,9 +97,16 @@ NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imag
 	if (fb == NULL) goto error;
 	memset(fb, 0, sizeof(NVGLUframebuffer));
 
+	fb->width = w;
+	fb->height = h;
+
 	fb->image = nvgCreateImageRGBA(ctx, w, h, imageFlags | NVG_IMAGE_FLIPY, NULL);
 	fb->texture = nvglImageHandle(ctx, fb->image);
 
+	if (doubleColAtt) {
+		fb->image2 = nvgCreateImageRGBA(ctx, w, h, imageFlags | NVG_IMAGE_FLIPY, NULL);
+		fb->texture2 = nvglImageHandle(ctx, fb->image2);
+	}
 
 	fb->ctx = ctx;
 
@@ -98,6 +121,10 @@ NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imag
 
 	// combine all
 	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
+
+	if (doubleColAtt)
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, fb->texture2, 0);
+
 	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fb->rbo);
 
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -161,11 +188,15 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 		glDeleteRenderbuffers(1, &fb->rbo);
 	if (fb->image >= 0)
 		nvgDeleteImage(fb->ctx, fb->image);
+	if (fb->image2 >= 0)
+		nvgDeleteImage(fb->ctx, fb->image2);
 	fb->ctx = NULL;
 	fb->fbo = 0;
 	fb->rbo = 0;
 	fb->texture = 0;
+	fb->texture2 = 0;
 	fb->image = -1;
+	fb->image2 = -1;
 	free(fb);
 }
 
@@ -174,7 +205,8 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 #define NANOVG_GL_IMPLEMENTATION
 #ifdef NANOVG_GL_IMPLEMENTATION
 
-static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUframebuffer* temp_fb, int total_width, int total_height, float blurStrength) {
+// Blurs a framebuffer with 2 colour attachments using a multi-pass blur in linear colour
+static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int total_width, int total_height, float blurStrength) {
     // Shader sources
     const char* vertexShaderSource = R"(
         #version 150 core
@@ -362,8 +394,15 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
 
     // Step 1: Convert sRGB to Linear Space
 	glUseProgram(sRGBToLinearShader);
-    nvgluBindFramebuffer(temp_fb);
+
+    nvgluBindFramebuffer(fb);
+
     glBindTexture(GL_TEXTURE_2D, fb->texture);
+
+	GLenum drawBuffers[1];
+	drawBuffers[0] = GL_COLOR_ATTACHMENT1;
+	glDrawBuffers(1, drawBuffers);
+
     glViewport(0, 0, total_width, total_height);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
@@ -386,16 +425,22 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
         float index = blurPassOffset[i] * std::min(blurStrength, 1.0f);
 
         // Horizontal pass
-        nvgluBindFramebuffer(fb);
-        glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+        glBindTexture(GL_TEXTURE_2D, fb->texture2);
+
+    	drawBuffers[0] = GL_COLOR_ATTACHMENT0;
+    	glDrawBuffers(1, drawBuffers);
+
         glUniform1f(texelWidthOffsetLoc, index / total_width);
         glUniform1f(texelHeightOffsetLoc, 0.0f);
         glViewport(0, 0, total_width, total_height);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
         // Vertical pass
-        nvgluBindFramebuffer(temp_fb);
         glBindTexture(GL_TEXTURE_2D, fb->texture);
+
+    	drawBuffers[0] = GL_COLOR_ATTACHMENT1;
+    	glDrawBuffers(1, drawBuffers);
+
         glUniform1f(texelWidthOffsetLoc, 0.0f);
         glUniform1f(texelHeightOffsetLoc, index / total_height);
         glViewport(0, 0, total_width, total_height);
@@ -404,8 +449,11 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, NVGLUfra
 
     // Step 3: Convert Linear Space Back to sRGB
 	glUseProgram(linearToSRGBShader);
-    nvgluBindFramebuffer(fb);
-    glBindTexture(GL_TEXTURE_2D, temp_fb->texture);
+    glBindTexture(GL_TEXTURE_2D, fb->texture2);
+
+	drawBuffers[0] = GL_COLOR_ATTACHMENT0;
+	glDrawBuffers(1, drawBuffers);
+
     glViewport(0, 0, total_width, total_height);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 

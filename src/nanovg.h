@@ -70,7 +70,7 @@ void* nvg__getUptr(void* ctx);
 #define nvgDeleteFramebuffer(fb) nvgluDeleteFramebuffer(fb)
 #define nvgViewport(x, y, w, h) glViewport(x, y, w, h)
 #define nvgReadPixels(nvg, image, x, y, w, h, total_h, data) nvgluReadPixels(nvg, image, x, y, w, h, total_h, data)
-#define nvgBlurFramebuffer(ctx, fb, temp_fb, total_width, total_height, blurAmount) nvgluBlurFramebuffer(ctx, fb, temp_fb, total_width, total_height, blurAmount)
+#define nvgBlurFramebuffer(ctx, fb, total_width, total_height, blurAmount) nvgluBlurFramebuffer(ctx, fb, total_width, total_height, blurAmount)
 #define nvgBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh) nvgluBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh)
 #define nvgClear(nvg) glDisable(GL_SCISSOR_TEST); \
                       glClearColor(0, 0, 0, 0); \
@@ -225,6 +225,7 @@ enum NVGimageFlags {
 	NVG_IMAGE_PREMULTIPLIED		= 1<<4,		// Image data has premultiplied alpha.
 	NVG_IMAGE_NEAREST			= 1<<5,		// Image interpolation is Nearest instead Linear
 	NVG_IMAGE_FLOAT         	= 1<<6,		// Image saved in float format - needed for feedback effects
+	NVG_DOUBLE_COLOUR_ATTACH 	= 1<<7,
 };
 
 // Begin drawing a new frame
