@@ -41,14 +41,20 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb);
 
 static GLint defaultFBO = -1;
 
-void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
+// Blit a framebuffer to the currently bound framebuffer with XY offset inside source framebuffer
+void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int srcXOffset, int srcYOffset, int w, int h)
 {
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
-	sy = fb->height - sy - sh;
-	dy = fb->height - dy - dh;
+	int sx = srcXOffset;
+	int sy = fb->height - (srcYOffset + h);
+	int sw = w;
+	int sh = h;
+
+	int dx = 0;
+	int dy = 0;
 
 	// Store the currently bound draw framebuffer
 	GLint currentDrawFBO;
@@ -56,23 +62,23 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
+
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
 	glBlitFramebuffer(
-		sx, sy,                      // Source lower-left corner
-		sx + sw, sy + sh,            // Source upper-right corner
-		dx, dy,                      // Destination lower-left corner
-		dx + dw, dy + dh,            // Destination upper-right corner
-		GL_COLOR_BUFFER_BIT,         // Copy color buffer
-		GL_LINEAR
+		sx, sy,                    // Source lower-left corner
+		sx + sw, sy + sh,          // Source upper-right corner
+		dx, dy,                    // Destination lower-left corner
+		dx + sw, dy + sh,          // Destination upper-right corner
+		GL_COLOR_BUFFER_BIT,       // Copy color buffer
+		GL_NEAREST                 // Interpolation method
 	);
-    glFinish();
+
 
     GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
         printf("OpenGL Error after glBlitFramebuffer: %d\n", error);
     }
-
-    //glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
 
     glEnable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);
