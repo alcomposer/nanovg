@@ -444,7 +444,7 @@ int nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags,
 
     if (type == NVG_TEXTURE_RGBA || type == NVG_TEXTURE_ARGB) {
         if (imageFlags & NVG_IMAGE_FLOAT)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, data);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, data);
         else
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
     } else {

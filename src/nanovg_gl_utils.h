@@ -47,9 +47,6 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
-    //int x2 = x + w;
-    //int y2 = y + h;
-
 	sy = fb->height - sy - sh;
 	dy = fb->height - dy - dh;
 
@@ -66,7 +63,7 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int sx, int sy,
 		dx, dy,                      // Destination lower-left corner
 		dx + dw, dy + dh,            // Destination upper-right corner
 		GL_COLOR_BUFFER_BIT,         // Copy color buffer
-		GL_NEAREST
+		GL_LINEAR
 	);
     glFinish();
 
@@ -206,7 +203,7 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 #ifdef NANOVG_GL_IMPLEMENTATION
 
 // Blurs a framebuffer with 2 colour attachments using a multi-pass blur in linear colour
-static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int total_width, int total_height, float blurStrength) {
+static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, int w, int h, int total_width, int total_height, float blurStrength) {
     // Shader sources
     const char* vertexShaderSource = R"(
         #version 150 core
@@ -390,7 +387,7 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
 	GLint currentProgram;
 	glGetIntegerv(GL_CURRENT_PROGRAM, &currentProgram);
 
-	glDisable(GL_SCISSOR_TEST);
+	//glDisable(GL_SCISSOR_TEST);
 
     // Step 1: Convert sRGB to Linear Space
 	glUseProgram(sRGBToLinearShader);
@@ -403,7 +400,7 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
 	drawBuffers[0] = GL_COLOR_ATTACHMENT1;
 	glDrawBuffers(1, drawBuffers);
 
-    glViewport(0, 0, total_width, total_height);
+    glViewport(0, 0, w, h);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
     // Step 2: Perform Blur in Linear Space (Blur can only be applied correctly in linear space)
@@ -430,9 +427,9 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     	drawBuffers[0] = GL_COLOR_ATTACHMENT0;
     	glDrawBuffers(1, drawBuffers);
 
-        glUniform1f(texelWidthOffsetLoc, index / total_width);
+        glUniform1f(texelWidthOffsetLoc, index / w);
         glUniform1f(texelHeightOffsetLoc, 0.0f);
-        glViewport(0, 0, total_width, total_height);
+        //glViewport(0, 0, w, h);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
         // Vertical pass
@@ -442,8 +439,8 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
     	glDrawBuffers(1, drawBuffers);
 
         glUniform1f(texelWidthOffsetLoc, 0.0f);
-        glUniform1f(texelHeightOffsetLoc, index / total_height);
-        glViewport(0, 0, total_width, total_height);
+        glUniform1f(texelHeightOffsetLoc, index / h);
+        //glViewport(0, 0, w, h);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
 
@@ -454,7 +451,7 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
 	drawBuffers[0] = GL_COLOR_ATTACHMENT0;
 	glDrawBuffers(1, drawBuffers);
 
-    glViewport(0, 0, total_width, total_height);
+    //glViewport(0, 0, w, h);
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 
     // Cleanup
@@ -467,7 +464,7 @@ static void nvgluBlurFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int tota
 
 	// Restore the previous program
 	glUseProgram(currentProgram);
-	glEnable(GL_SCISSOR_TEST);
+	//glEnable(GL_SCISSOR_TEST);
 }
 
 #endif // NANOVG_GL_IMPLEMENTATION

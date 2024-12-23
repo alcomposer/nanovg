@@ -70,7 +70,7 @@ void* nvg__getUptr(void* ctx);
 #define nvgDeleteFramebuffer(fb) nvgluDeleteFramebuffer(fb)
 #define nvgViewport(x, y, w, h) glViewport(x, y, w, h)
 #define nvgReadPixels(nvg, image, x, y, w, h, total_h, data) nvgluReadPixels(nvg, image, x, y, w, h, total_h, data)
-#define nvgBlurFramebuffer(ctx, fb, total_width, total_height, blurAmount) nvgluBlurFramebuffer(ctx, fb, total_width, total_height, blurAmount)
+#define nvgBlurFramebuffer(ctx, fb, x, y, w, h, total_width, total_height,  blurAmount) nvgluBlurFramebuffer(ctx, fb, x, y, w, h, total_width, total_height, blurAmount)
 #define nvgBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh) nvgluBlitFramebuffer(nvg, fb, sx, sy, sw, sh, dx, dy, dw, dh)
 #define nvgClear(nvg) glDisable(GL_SCISSOR_TEST); \
                       glClearColor(0, 0, 0, 0); \
