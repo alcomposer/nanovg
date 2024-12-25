@@ -42,19 +42,20 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb);
 static GLint defaultFBO = -1;
 
 // Blit a framebuffer to the currently bound framebuffer with XY offset inside source framebuffer
-void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int srcXOffset, int srcYOffset, int w, int h)
+void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int srcXPos, int srcYPos, int desXPos, int desYPos, int w, int h)
 {
-    glDisable(GL_SCISSOR_TEST);
+    //glDisable(GL_SCISSOR_TEST);
     glDisable(GL_BLEND);
     glDisable(GL_CULL_FACE);
 
-	int sx = srcXOffset;
-	int sy = fb->height - (srcYOffset + h);
-	int sw = w;
-	int sh = h;
+	int sx = srcXPos;
+	int sy = fb->height - (srcYPos + h);
 
-	int dx = 0;
-	int dy = 0;
+	int dx = desXPos;
+	int dy = h - (desYPos + h);
+
+	//int dx = 0;
+	//int dy = 0;
 
 	// Store the currently bound draw framebuffer
 	GLint currentDrawFBO;
@@ -63,13 +64,13 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int srcXOffset,
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, currentDrawFBO);
 
-    glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    //glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
 	glBlitFramebuffer(
 		sx, sy,                    // Source lower-left corner
-		sx + sw, sy + sh,          // Source upper-right corner
+		sx + w, sy + h,          // Source upper-right corner
 		dx, dy,                    // Destination lower-left corner
-		dx + sw, dy + sh,          // Destination upper-right corner
+		dx + w, dy + h,          // Destination upper-right corner
 		GL_COLOR_BUFFER_BIT,       // Copy color buffer
 		GL_NEAREST                 // Interpolation method
 	);
@@ -80,7 +81,7 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int srcXOffset,
         printf("OpenGL Error after glBlitFramebuffer: %d\n", error);
     }
 
-    glEnable(GL_SCISSOR_TEST);
+    //glEnable(GL_SCISSOR_TEST);
     glEnable(GL_BLEND);
     glEnable(GL_CULL_FACE);
 }
