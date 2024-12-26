@@ -443,9 +443,9 @@ int nvg__renderCreateTexture(void* uptr, int type, int w, int h, int imageFlags,
 
     glnvg__updateTexPixelStoreiVals(4, 0, 0, 0);
 
-    if (type == NVG_TEXTURE_RGBA || type == NVG_TEXTURE_ARGB)
+    if (type == NVG_TEXTURE_RGBA || type == NVG_TEXTURE_ARGB) {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-    else
+    } else
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, w, h, 0, GL_RED, GL_UNSIGNED_BYTE, data);
 
     if (imageFlags & NVG_IMAGE_GENERATE_MIPMAPS) {
@@ -1169,7 +1169,6 @@ void nvg__renderFlush(void* uptr, NVGscissorBounds scissor)
         // Setup require GL state.
         glUseProgram(gl->shader.prog);
 
-        //glEnable(GL_FRAMEBUFFER_SRGB);
         glEnable(GL_CULL_FACE);
         glCullFace(GL_BACK);
         glFrontFace(GL_CCW);

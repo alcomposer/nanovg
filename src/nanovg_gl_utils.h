@@ -23,6 +23,7 @@ struct NVGLUframebuffer {
 	GLuint fbo;
 	GLuint rbo;
 	GLuint texture;
+	GLuint resolveFBO;
 	int image;
 };
 typedef struct NVGLUframebuffer NVGLUframebuffer;
@@ -45,11 +46,16 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
 
     int x2 = x + w;
     int y2 = y + h;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
+
+	glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb->resolveFBO);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+	glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->resolveFBO);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFBO);
     glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    glFinish();
 
     GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
@@ -65,58 +71,58 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
 
 NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imageFlags)
 {
-	GLint defaultFBO;
-	GLint defaultRBO;
-	NVGLUframebuffer* fb = NULL;
+	glEnable(GL_MULTISAMPLE);
 
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &defaultFBO);
-	glGetIntegerv(GL_RENDERBUFFER_BINDING, &defaultRBO);
+    GLint defaultFBO;
+    GLint defaultRBO;
+    NVGLUframebuffer* fb = NULL;
+    int msaaSamples = 16; // Number of samples for multisampling
 
-	fb = (NVGLUframebuffer*)malloc(sizeof(NVGLUframebuffer));
-	if (fb == NULL) goto error;
-	memset(fb, 0, sizeof(NVGLUframebuffer));
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &defaultFBO);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &defaultRBO);
 
-	fb->image = nvgCreateImageRGBA(ctx, w, h, imageFlags | NVG_IMAGE_FLIPY, NULL);
-	fb->texture = nvglImageHandle(ctx, fb->image);
+    fb = (NVGLUframebuffer*)malloc(sizeof(NVGLUframebuffer));
+    if (fb == NULL) goto error;
+    memset(fb, 0, sizeof(NVGLUframebuffer));
 
+    fb->ctx = ctx;
 
-	fb->ctx = ctx;
+    // Create the standard texture for resolved output
+    fb->image = nvgCreateImageRGBA(ctx, w, h, imageFlags | NVG_IMAGE_FLIPY, NULL);
+    fb->texture = nvglImageHandle(ctx, fb->image);
 
-	// frame buffer object
-	glGenFramebuffers(1, &fb->fbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
+    // Create a multisampled framebuffer object
+    glGenFramebuffers(1, &fb->fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb->fbo);
 
-	// render buffer object
-	glGenRenderbuffers(1, &fb->rbo);
-	glBindRenderbuffer(GL_RENDERBUFFER, fb->rbo);
-	glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, w, h);
+    // Create a multisampled renderbuffer for color
+    glGenRenderbuffers(1, &fb->rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, fb->rbo);
+    glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaaSamples, GL_RGBA8, w, h);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fb->rbo);
 
-	// combine all
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
-	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fb->rbo);
+    // Create a resolve framebuffer for blitting multisampled data
+    glGenFramebuffers(1, &fb->resolveFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, fb->resolveFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
 
-	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-#ifdef GL_DEPTH24_STENCIL8
-		// If GL_STENCIL_INDEX8 is not supported, try GL_DEPTH24_STENCIL8 as a fallback.
-		// Some graphics cards require a depth buffer along with a stencil.
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
-		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fb->rbo);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        goto error;
+    }
 
-		if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-#endif // GL_DEPTH24_STENCIL8
-			goto error;
-	}
+    // Restore default framebuffer bindings
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, defaultRBO);
 
-	glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
-	glBindRenderbuffer(GL_RENDERBUFFER, defaultRBO);
-	return fb;
+    return fb;
+
 error:
-	glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
-	glBindRenderbuffer(GL_RENDERBUFFER, defaultRBO);
-	nvgluDeleteFramebuffer(fb);
-	return NULL;
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, defaultRBO);
+    nvgluDeleteFramebuffer(fb);
+    return NULL;
 }
+
 
 void nvgluBindFramebuffer(NVGLUframebuffer* fb)
 {
@@ -150,6 +156,8 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	if (fb == NULL) return;
 	if (fb->fbo != 0)
 		glDeleteFramebuffers(1, &fb->fbo);
+	if (fb->resolveFBO != 0)
+		glDeleteFramebuffers(1, &fb->resolveFBO);
 	if (fb->rbo != 0)
 		glDeleteRenderbuffers(1, &fb->rbo);
 	if (fb->image >= 0)
@@ -157,6 +165,7 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	fb->ctx = NULL;
 	fb->fbo = 0;
 	fb->rbo = 0;
+	fb->resolveFBO = 0;
 	fb->texture = 0;
 	fb->image = -1;
 	free(fb);
