@@ -23,7 +23,6 @@ struct NVGLUframebuffer {
 	GLuint fbo;
 	GLuint rbo;
 	GLuint texture;
-	GLuint resolveFBO;
 	int image;
 };
 typedef struct NVGLUframebuffer NVGLUframebuffer;
@@ -48,14 +47,9 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
     int y2 = y + h;
 
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->fbo);
-	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb->resolveFBO);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fb->resolveFBO);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFBO);
-    glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, defaultFBO);
+	glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	glBlitFramebuffer(x, y, x2, y2, x, y, x2, y2, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     GLenum error = glGetError();
     if (error != GL_NO_ERROR) {
@@ -71,12 +65,19 @@ void nvgluBlitFramebuffer(NVGcontext* ctx, NVGLUframebuffer* fb, int x, int y, i
 
 NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imageFlags)
 {
-	glEnable(GL_MULTISAMPLE);
+	// Check for multisampling support
+	GLint maxSamples;
+	glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+	std::cout << "Maximum MSAA samples supported: " << maxSamples << std::endl;
+	int msaaSamples = 0;
+	if (maxSamples > 9) {
+		msaaSamples = 9;
+		glEnable(GL_MULTISAMPLE);
+	}
 
     GLint defaultFBO;
     GLint defaultRBO;
     NVGLUframebuffer* fb = NULL;
-    int msaaSamples = 16; // Number of samples for multisampling
 
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &defaultFBO);
     glGetIntegerv(GL_RENDERBUFFER_BINDING, &defaultRBO);
@@ -98,13 +99,16 @@ NVGLUframebuffer* nvgluCreateFramebuffer(NVGcontext* ctx, int w, int h, int imag
     // Create a multisampled renderbuffer for color
     glGenRenderbuffers(1, &fb->rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, fb->rbo);
-    glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaaSamples, GL_RGBA8, w, h);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fb->rbo);
 
-    // Create a resolve framebuffer for blitting multisampled data
-    glGenFramebuffers(1, &fb->resolveFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, fb->resolveFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
+	if (imageFlags & NVG_IMAGE_MULTISAMPLE && msaaSamples > 0) {
+		glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaaSamples, GL_RGBA8, w, h);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, fb->rbo);
+	} else {
+		glRenderbufferStorage(GL_RENDERBUFFER, GL_STENCIL_INDEX8, w, h);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fb->texture, 0);
+		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fb->rbo);
+	}
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         goto error;
@@ -156,8 +160,6 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	if (fb == NULL) return;
 	if (fb->fbo != 0)
 		glDeleteFramebuffers(1, &fb->fbo);
-	if (fb->resolveFBO != 0)
-		glDeleteFramebuffers(1, &fb->resolveFBO);
 	if (fb->rbo != 0)
 		glDeleteRenderbuffers(1, &fb->rbo);
 	if (fb->image >= 0)
@@ -165,7 +167,6 @@ void nvgluDeleteFramebuffer(NVGLUframebuffer* fb)
 	fb->ctx = NULL;
 	fb->fbo = 0;
 	fb->rbo = 0;
-	fb->resolveFBO = 0;
 	fb->texture = 0;
 	fb->image = -1;
 	free(fb);
